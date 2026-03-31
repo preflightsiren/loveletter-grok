@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Love Letter - Lobby</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            width: 300px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .error {
+            color: red;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .join-key {
+            background-color: white;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .players {
+            background-color: white;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .players h2 {
+            margin-top: 0;
+        }
+        .players ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        .players li {
+            padding: 5px 0;
+        }
+        .chat {
+            background-color: white;
+            padding: 10px;
+            border-radius: 8px;
+            height: 300px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat h2 {
+            margin-top: 0;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .chat-input {
+            display: flex;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px 0 0 4px;
+        }
+        .chat-input button {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 0 4px 4px 0;
+            cursor: pointer;
+            width: 60px;
+        }
+        .chat-input button:hover {
+            background-color: #45a049;
+        }
+        #leaveGame {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #f44336;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #leaveGame:hover {
+            background-color: #d32f2f;
+        }
+        .kick-btn {
+            margin-left: 5px;
+            padding: 1px 3px;
+            background-color: #ccc;
+            color: #666;
+            border: none;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 10px;
+            width: 16px;
+            height: 16px;
+            line-height: 14px;
+        }
+        .kick-btn:hover {
+            background-color: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Love Letter Lobby</h1>
+        <input type="text" id="nickname" placeholder="Enter your nickname" maxlength="20">
+        <button id="createGame">Create New Game</button>
+        <input type="text" id="joinKeyInput" placeholder="Enter join key" maxlength="8">
+        <button id="joinGame">Join Game</button>
+        <div id="error" class="error"></div>
+    </div>
+
+    <div id="gameSection" style="display:none;">
+        <div class="container">
+            <h1>Love Letter Game</h1>
+        <div class="join-key">
+            <p id="joinKey">Join Key: </p>
+        </div>
+            <div class="players">
+                <h2>Players</h2>
+                <ul id="playerList"></ul>
+            </div>
+            <div class="chat">
+                <h2>Chat</h2>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input">
+                    <input type="text" id="messageInput" placeholder="Type a message..." maxlength="200">
+                    <button id="sendMessage">Send</button>
+                </div>
+                <button id="leaveGame">Leave Game</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+</html>
