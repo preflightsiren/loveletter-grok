@@ -140,6 +140,76 @@
             background-color: #f44336;
             color: white;
         }
+        #startReady {
+            padding: 8px 16px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        #startReady:hover {
+            background-color: #0b7dda;
+        }
+        #toggleReady {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        #toggleReady:hover {
+            background-color: #45a049;
+        }
+        #readyStatus {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .ready-player {
+            color: green;
+        }
+        .current-player {
+            font-weight: bold;
+            color: blue;
+        }
+        #startReady {
+            padding: 8px 16px;
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        #startReady:hover {
+            background-color: #0b7dda;
+        }
+        #toggleReady {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        #toggleReady:hover {
+            background-color: #45a049;
+        }
+        #readyStatus {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .ready-player {
+            color: green;
+        }
+        .current-player {
+            font-weight: bold;
+            color: blue;
+        }
     </style>
 </head>
 <body>
@@ -161,6 +231,9 @@
             <div class="players">
                 <h2>Players</h2>
                 <ul id="playerList"></ul>
+                <button id="startReady" style="display:none;">Start Ready Phase</button>
+                <button id="toggleReady" style="display:none;">Ready</button>
+                <div id="readyStatus" style="display:none;"></div>
             </div>
             <div class="chat">
                 <h2>Chat</h2>
@@ -170,6 +243,18 @@
                     <button id="sendMessage">Send</button>
                 </div>
                 <button id="leaveGame">Leave Game</button>
+            </div>
+            <div id="gameMode" style="display:none;">
+                <h2>Your Hand</h2>
+                <p id="hand"></p>
+                <h2>Current Turn</h2>
+                <p id="currentTurn"></p>
+            </div>
+            <div id="gameMode" style="display:none;">
+                <h2>Your Hand</h2>
+                <p id="hand"></p>
+                <h2>Current Turn</h2>
+                <p id="currentTurn"></p>
             </div>
         </div>
     </div>

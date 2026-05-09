@@ -37,15 +37,22 @@ socket.on('createGame', (data) => {
             chat: [],
             lastActivity: Date.now(),
             kickCounts: new Map(),
-            banned: new Set()
+            banned: new Set(),
+            readyPhase: false,
+            readyPlayers: new Set(),
+            isStarted: false,
+            deck: [],
+            hands: new Map(),
+            currentPlayerId: null,
+            burnedCard: null
         };
     games.set(joinKey, game);
 
     socket.playerId = playerId;
     socket.join(joinKey);
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-    socket.emit('gameJoined', { joinKey, players: game.players });
-    console.log(`Game created: ${joinKey} by ${nickname}`);
+        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
+        console.log(`Game created: ${joinKey} by ${nickname}`);
 });
 
 // Join an existing game
@@ -82,9 +89,9 @@ socket.on('joinGame', (data) => {
             socket.playerId = playerId;
             socket.join(joinKey);
             console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-            socket.emit('gameJoined', { joinKey, players: game.players });
-            socket.to(joinKey).emit('playerJoined', { players: game.players });
-            console.log(`${trimmedNick} rejoined game: ${joinKey}`);
+        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
+        socket.to(joinKey).emit('playerJoined', { players: game.players });
+        console.log(`${trimmedNick} rejoined game: ${joinKey}`);
         } else {
             // Already joined with same nick
             socket.emit('error', 'Already in game');
@@ -109,9 +116,9 @@ socket.on('joinGame', (data) => {
     socket.playerId = playerId;
     socket.join(joinKey);
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-    socket.emit('gameJoined', { joinKey, players: game.players });
-    socket.to(joinKey).emit('playerJoined', { players: game.players });
-    console.log(`${nickname} joined game: ${joinKey}`);
+        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
+        socket.to(joinKey).emit('playerJoined', { players: game.players });
+        console.log(`${nickname} joined game: ${joinKey}`);
 });
 
     // Leave game
@@ -188,7 +195,7 @@ socket.on('reconnectGame', (data) => {
         socket.playerId = playerId;
         socket.join(joinKey);
         game.lastActivity = Date.now();
-        socket.emit('gameJoined', { joinKey, players: game.players });
+        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
         console.log(`Reconnected ${player.nickname} to game: ${joinKey}`);
     });
 
@@ -216,23 +223,231 @@ socket.on('sendMessage', (data) => {
     io.to(game.joinKey).emit('message', { message: chatMessage });
 });
 
-    // Handle disconnection
-    socket.on('disconnect', () => {
-        console.log('A user disconnected:', socket.id);
-        // Remove player from game
-        for (const [key, game] of games) {
-            const index = game.players.findIndex(p => p.id === socket.id);
-            if (index !== -1) {
-                game.players.splice(index, 1);
-                socket.to(key).emit('playerLeft', { players: game.players });
-                // If no players left, delete game
-                if (game.players.length === 0) {
-                    games.delete(key);
-                }
-                break;
-            }
+// Start ready phase
+socket.on('startReady', (data) => {
+    const { playerId } = data;
+    for (const [key, game] of games) {
+        if (game.players[0].id === playerId && !game.readyPhase && !game.isStarted && game.players.length >= 2) {
+            game.readyPhase = true;
+            game.readyPlayers.clear();
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyPhaseStarted');
+            console.log(`Ready phase started for game: ${key}`);
+            break;
         }
+    }
+});
+
+// Toggle ready
+socket.on('toggleReady', (data) => {
+    const { playerId } = data;
+    for (const [key, game] of games) {
+        const player = game.players.find(p => p.id === playerId);
+        if (player && game.readyPhase && !game.isStarted) {
+            if (game.readyPlayers.has(playerId)) {
+                game.readyPlayers.delete(playerId);
+            } else {
+                game.readyPlayers.add(playerId);
+            }
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
+            // Check if all ready
+            if (game.readyPlayers.size === game.players.length) {
+                initializeGame(game, key);
+            }
+            console.log(`Player ${playerId} toggled ready in game: ${key}`);
+            break;
+        }
+    }
+});
+
+// Initialize game function
+function initializeGame(game, key) {
+    // Ported from loveletter.py
+    const CARDS = {
+        'Princess': { count: 1, value: 8 },
+        'Countess': { count: 1, value: 7 },
+        'King': { count: 1, value: 6 },
+        'Prince': { count: 2, value: 5 },
+        'Handmaiden': { count: 2, value: 4 },
+        'Baron': { count: 2, value: 3 },
+        'Priest': { count: 2, value: 2 },
+        'Guard': { count: 5, value: 1 }
+    };
+
+    class Card {
+        constructor(name, value) {
+            this.name = name;
+            this.value = value;
+        }
+    }
+
+    game.deck = [];
+    for (const [name, info] of Object.entries(CARDS)) {
+        for (let i = 0; i < info.count; i++) {
+            game.deck.push(new Card(name, info.value));
+        }
+    }
+
+    // Shuffle deck
+    game.deck.sort(() => Math.random() - 0.5);
+
+    // Burn first card
+    game.burnedCard = game.deck.shift();
+
+    // Deal one card to each player
+    game.hands = new Map();
+    game.players.forEach(player => {
+        const card = game.deck.shift();
+        game.hands.set(player.id, [card]);
     });
+
+    // Pick random starting player
+    const randomIndex = Math.floor(Math.random() * game.players.length);
+    game.currentPlayerId = game.players[randomIndex].id;
+
+    game.isStarted = true;
+    game.readyPhase = false;
+    game.lastActivity = Date.now();
+
+    // Broadcast public state
+    io.to(key).emit('gameStarted', { currentPlayerId: game.currentPlayerId, burnedCard: { name: game.burnedCard.name, value: game.burnedCard.value } });
+
+    // Send private hands
+    game.players.forEach(player => {
+        const hand = game.hands.get(player.id);
+        io.to(player.id).emit('privateHand', { hand: hand.map(c => ({ name: c.name, value: c.value })) });
+    });
+
+    console.log(`Game started for ${key}, starting player: ${game.currentPlayerId}`);
+}
+
+// Start ready phase
+socket.on('startReady', (data) => {
+    const { playerId } = data;
+    for (const [key, game] of games) {
+        if (game.players[0].id === playerId && !game.readyPhase && !game.isStarted && game.players.length >= 2) {
+            game.readyPhase = true;
+            game.readyPlayers.clear();
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyPhaseStarted');
+            console.log(`Ready phase started for game: ${key}`);
+            break;
+        }
+    }
+});
+
+// Toggle ready
+socket.on('toggleReady', (data) => {
+    const { playerId } = data;
+    for (const [key, game] of games) {
+        const player = game.players.find(p => p.id === playerId);
+        if (player && game.readyPhase && !game.isStarted) {
+            if (game.readyPlayers.has(playerId)) {
+                game.readyPlayers.delete(playerId);
+            } else {
+                game.readyPlayers.add(playerId);
+            }
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
+            // Check if all ready
+            if (game.readyPlayers.size === game.players.length) {
+                initializeGame(game, key);
+            }
+            console.log(`Player ${playerId} toggled ready in game: ${key}`);
+            break;
+        }
+    }
+});
+
+// Initialize game function
+function initializeGame(game, key) {
+    // Ported from loveletter.py
+    const CARDS = {
+        'Princess': { count: 1, value: 8 },
+        'Countess': { count: 1, value: 7 },
+        'King': { count: 1, value: 6 },
+        'Prince': { count: 2, value: 5 },
+        'Handmaiden': { count: 2, value: 4 },
+        'Baron': { count: 2, value: 3 },
+        'Priest': { count: 2, value: 2 },
+        'Guard': { count: 5, value: 1 }
+    };
+
+    class Card {
+        constructor(name, value) {
+            this.name = name;
+            this.value = value;
+        }
+    }
+
+    game.deck = [];
+    for (const [name, info] of Object.entries(CARDS)) {
+        for (let i = 0; i < info.count; i++) {
+            game.deck.push(new Card(name, info.value));
+        }
+    }
+
+    // Shuffle deck
+    game.deck.sort(() => Math.random() - 0.5);
+
+    // Burn first card
+    game.burnedCard = game.deck.shift();
+
+    // Deal one card to each player
+    game.hands = new Map();
+    game.players.forEach(player => {
+        const card = game.deck.shift();
+        game.hands.set(player.id, [card]);
+    });
+
+    // Pick random starting player
+    const randomIndex = Math.floor(Math.random() * game.players.length);
+    game.currentPlayerId = game.players[randomIndex].id;
+
+    game.isStarted = true;
+    game.readyPhase = false;
+    game.lastActivity = Date.now();
+
+    // Broadcast public state
+    io.to(key).emit('gameStarted', { currentPlayerId: game.currentPlayerId });
+
+    // Send private hands
+    game.players.forEach(player => {
+        const hand = game.hands.get(player.id);
+        io.to(player.id).emit('privateHand', { hand: hand.map(c => ({ name: c.name, value: c.value })) });
+    });
+
+    console.log(`Game started for ${key}, starting player: ${game.currentPlayerId}`);
+}
+
+// Handle disconnection
+socket.on('disconnect', () => {
+    console.log('A user disconnected:', socket.id);
+    // Remove player from game
+    for (const [key, game] of games) {
+        const index = game.players.findIndex(p => p.id === socket.playerId);
+        if (index !== -1) {
+            game.players.splice(index, 1);
+            game.readyPlayers.delete(socket.playerId);
+            game.lastActivity = Date.now();
+            socket.to(key).emit('playerLeft', { players: game.players });
+            // If creator left
+            if (index === 0) {
+                io.to(key).emit('gameEnded', { message: 'Creator left the game' });
+                games.delete(key);
+            } else if (game.players.length === 0) {
+                games.delete(key);
+            } else if (game.readyPhase) {
+                io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
+            } else if (game.isStarted && game.players.length < 2) {
+                io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
+                games.delete(key);
+            }
+            break;
+        }
+    }
+});
 });
 
 const PORT = process.env.PORT || 3000;

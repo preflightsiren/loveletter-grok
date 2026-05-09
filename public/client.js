@@ -18,52 +18,17 @@ const playerList = document.getElementById('playerList');
 const chatMessages = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendMessage');
+const startReadyButton = document.getElementById('startReady');
+const toggleReadyButton = document.getElementById('toggleReady');
+const readyStatusDiv = document.getElementById('readyStatus');
+const gameModeDiv = document.getElementById('gameMode');
+const handSpan = document.getElementById('hand');
+const currentTurnSpan = document.getElementById('currentTurn');
 let joined = false;
 
-// Reconnect on connect
-socket.on('connect', () => {
-    const storedGameKey = localStorage.getItem('gameKey');
-    if (storedGameKey) {
-        console.log('Attempting to reconnect to game with key:', storedGameKey, 'playerId:', playerId);
-        socket.emit('reconnectGame', { joinKey: storedGameKey, playerId: playerId });
-    }
-});
-
-createButton.addEventListener('click', () => {
-    const nickname = nicknameInput.value.trim();
-    if (nickname) {
-        console.log('Emitting createGame with nickname:', nickname);
-        socket.emit('createGame', { nickname, playerId });
-    } else {
-        showError('Please enter a nickname');
-    }
-});
-
-joinButton.addEventListener('click', () => {
-    const nickname = nicknameInput.value.trim();
-    const joinKey = joinKeyInput.value.trim();
-    if (nickname && joinKey) {
-        socket.emit('joinGame', { joinKey, nickname, playerId });
-    } else {
-        showError('Please enter nickname and join key');
-    }
-});
-
-socket.on('error', (message) => {
-    showError(message);
-    // If reconnect failed, clear storage and stay in lobby
-    if (message === 'Game not found' || message === 'Game expired' || message === 'Player not in game') {
-        localStorage.removeItem('gameKey');
-        localStorage.removeItem('playerId');
-        console.log('Cleared stored game due to error:', message);
-    }
-});
-
-socket.on('gameJoined', (data) => {
-    console.log('Received gameJoined:', data);
-    // Store game session
-    localStorage.setItem('gameKey', data.joinKey);
-    localStorage.setItem('playerId', socket.id); // Assuming socket.id is the player id
+// Generate or get persistent player ID
+const playerId = localStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
+localStorage.setItem('playerId', playerId);
     // Switch to game view
     document.querySelector('.container').style.display = 'none';
     document.getElementById('gameSection').style.display = 'block';
@@ -76,12 +41,134 @@ socket.on('gameJoined', (data) => {
     } else {
         console.error('Join key element not found');
     }
-    updatePlayers(data.players);
+    updatePlayers(data.players, data.readyPlayers, data.currentPlayerId, data.isStarted);
+    if (data.isStarted) {
+        gameModeDiv.style.display = 'block';
+        currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
+    } else {
+        gameModeDiv.style.display = 'none';
+    }
+    if (data.readyPhase) {
+        toggleReadyButton.style.display = 'block';
+        readyStatusDiv.style.display = 'block';
+        // Set button text based on if ready
+        if (data.readyPlayers.includes(playerId)) {
+            toggleReadyButton.textContent = 'Unready';
+        } else {
+            toggleReadyButton.textContent = 'Ready';
+        }
+    } else {
+        toggleReadyButton.style.display = 'none';
+        readyStatusDiv.style.display = 'none';
+    }
+    if (data.players[0].id === playerId && !data.readyPhase && !data.isStarted && data.players.length >= 2) {
+        startReadyButton.style.display = 'block';
+    } else {
+        startReadyButton.style.display = 'none';
+    }
     joined = true;
 });
 
 socket.on('playerJoined', (data) => {
     updatePlayers(data.players);
+});
+
+socket.on('readyPhaseStarted', () => {
+    toggleReadyButton.style.display = 'block';
+    toggleReadyButton.textContent = 'Ready';
+    readyStatusDiv.style.display = 'block';
+    readyStatusDiv.textContent = 'Waiting for all players to ready up...';
+});
+
+socket.on('readyUpdate', (data) => {
+    updatePlayers(data.players, data.readyPlayers);
+    readyStatusDiv.textContent = `Ready: ${data.readyPlayers.length} / ${data.players.length}`;
+});
+
+socket.on('gameStarted', (data) => {
+    gameModeDiv.style.display = 'block';
+    startReadyButton.style.display = 'none';
+    toggleReadyButton.style.display = 'none';
+    readyStatusDiv.style.display = 'none';
+    currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
+    updatePlayers(data.players, [], data.currentPlayerId, true);
+});
+
+socket.on('privateHand', (data) => {
+    handSpan.textContent = data.hand.map(c => `${c.name} (${c.value})`).join(', ');
+});
+
+socket.on('gameEnded', (data) => {
+    alert(data.message);
+    localStorage.removeItem('gameKey');
+    localStorage.removeItem('playerId');
+    // Switch to lobby
+    document.getElementById('gameSection').style.display = 'none';
+    document.querySelector('.container').style.display = 'block';
+    joined = false;
+    // Clear UI
+    chatMessages.innerHTML = '';
+    playerList.innerHTML = '';
+    document.getElementById('joinKey').textContent = 'Join Key: ';
+    gameModeDiv.style.display = 'none';
+});
+
+startReadyButton.addEventListener('click', () => {
+    socket.emit('startReady', { playerId });
+});
+
+toggleReadyButton.addEventListener('click', () => {
+    socket.emit('toggleReady', { playerId });
+    toggleReadyButton.textContent = toggleReadyButton.textContent === 'Ready' ? 'Unready' : 'Ready';
+});
+
+socket.on('readyPhaseStarted', () => {
+    toggleReadyButton.style.display = 'block';
+    toggleReadyButton.textContent = 'Ready';
+    readyStatusDiv.style.display = 'block';
+    readyStatusDiv.textContent = 'Waiting for all players to ready up...';
+});
+
+socket.on('readyUpdate', (data) => {
+    updatePlayers(data.players, data.readyPlayers);
+    readyStatusDiv.textContent = `Ready: ${data.readyPlayers.length} / ${data.players.length}`;
+});
+
+socket.on('gameStarted', (data) => {
+    gameModeDiv.style.display = 'block';
+    startReadyButton.style.display = 'none';
+    toggleReadyButton.style.display = 'none';
+    readyStatusDiv.style.display = 'none';
+    currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
+    updatePlayers(data.players, [], data.currentPlayerId, true);
+});
+
+socket.on('privateHand', (data) => {
+    handSpan.textContent = data.hand.map(c => `${c.name} (${c.value})`).join(', ');
+});
+
+socket.on('gameEnded', (data) => {
+    alert(data.message);
+    localStorage.removeItem('gameKey');
+    localStorage.removeItem('playerId');
+    // Switch to lobby
+    document.getElementById('gameSection').style.display = 'none';
+    document.querySelector('.container').style.display = 'block';
+    joined = false;
+    // Clear UI
+    chatMessages.innerHTML = '';
+    playerList.innerHTML = '';
+    document.getElementById('joinKey').textContent = 'Join Key: ';
+    gameModeDiv.style.display = 'none';
+});
+
+startReadyButton.addEventListener('click', () => {
+    socket.emit('startReady', { playerId });
+});
+
+toggleReadyButton.addEventListener('click', () => {
+    socket.emit('toggleReady', { playerId });
+    toggleReadyButton.textContent = toggleReadyButton.textContent === 'Ready' ? 'Unready' : 'Ready';
 });
 
 socket.on('playerLeft', (data) => {
@@ -137,12 +224,19 @@ function sendMessage() {
     }
 }
 
-function updatePlayers(players) {
+function updatePlayers(players, readyPlayers = [], currentPlayerId = null, isStarted = false) {
     playerList.innerHTML = '';
     const isCreator = players.length > 0 && players[0].id === playerId;
     players.forEach(player => {
         const li = document.createElement('li');
         li.textContent = player.nickname;
+        if (readyPlayers.includes(player.id)) {
+            li.textContent += ' (Ready)';
+            li.className = 'ready-player';
+        }
+        if (isStarted && player.id === currentPlayerId) {
+            li.className += ' current-player';
+        }
         if (isCreator && player.id !== playerId) {
             const kickBtn = document.createElement('button');
             kickBtn.textContent = 'x';
