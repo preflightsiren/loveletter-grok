@@ -86,9 +86,10 @@ socket.on('joinGame', (data) => {
             }
             existingPlayer.nickname = trimmedNick;
             game.lastActivity = Date.now();
-            socket.playerId = playerId;
-            socket.join(joinKey);
-            console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
+    socket.playerId = playerId;
+    socket.join(joinKey);
+    socket.join(playerId); // for private messages (hands, priest reveals)
+    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
         socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
         socket.to(joinKey).emit('playerJoined', { players: game.players });
         console.log(`${trimmedNick} rejoined game: ${joinKey}`);
@@ -115,9 +116,23 @@ socket.on('joinGame', (data) => {
     game.lastActivity = Date.now();
     socket.playerId = playerId;
     socket.join(joinKey);
+    socket.join(playerId);
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
         socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
         socket.to(joinKey).emit('playerJoined', { players: game.players });
+
+        // If joining an active game/round, give them a hand so they don't miss out
+        if (game.isStarted && !game.roundOver && game.deck && game.deck.length > 0 && !game.hands.has(playerId)) {
+            const card = game.deck.shift();
+            game.hands.set(playerId, [card]);
+            socket.emit('privateHand', {
+                hand: [{ name: card.name, value: card.value }]
+            });
+            io.to(joinKey).emit('playerJoinedActive', {
+                player: { id: playerId, nickname: player.nickname }
+            });
+        }
+
         console.log(`${nickname} joined game: ${joinKey}`);
 });
 
@@ -128,8 +143,12 @@ socket.on('joinGame', (data) => {
             const index = game.players.findIndex(p => p.id === playerId);
             if (index !== -1) {
                 game.players.splice(index, 1);
+                game.readyPlayers.delete(playerId);
                 game.lastActivity = Date.now();
                 socket.to(key).emit('playerLeft', { players: game.players });
+                if (game.readyPhase) {
+                    io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                }
                 console.log(`Player ${playerId} left game: ${key}`);
                 break;
             }
@@ -141,10 +160,11 @@ socket.on('joinGame', (data) => {
         const { kickedPlayerId, playerId } = data;
         for (const [key, game] of games) {
             const kicker = game.players.find(p => p.id === playerId);
-            if (kicker && game.players[0].id === playerId) { // Only creator can kick
+            if (kicker && game.players.length > 0 && game.players[0] && game.players[0].id === playerId) { // Only creator can kick
                 const kickedIndex = game.players.findIndex(p => p.id === kickedPlayerId);
                 if (kickedIndex !== -1 && kickedPlayerId !== playerId) {
                     const kickedPlayer = game.players.splice(kickedIndex, 1)[0];
+                    game.readyPlayers.delete(kickedPlayerId);
                     game.lastActivity = Date.now();
                     // Increment kick count
                     const newCount = (game.kickCounts.get(kickedPlayerId) || 0) + 1;
@@ -162,6 +182,9 @@ socket.on('joinGame', (data) => {
                         }
                     }
                     socket.to(key).emit('playerLeft', { players: game.players });
+                    if (game.readyPhase) {
+                        io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                    }
                     console.log(`Player ${kickedPlayerId} kicked from game: ${key} (count: ${newCount})`);
                 }
             }
@@ -194,8 +217,18 @@ socket.on('reconnectGame', (data) => {
     }
         socket.playerId = playerId;
         socket.join(joinKey);
+        socket.join(playerId);
         game.lastActivity = Date.now();
         socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
+
+        // Send current hand on reconnect if game is active
+        if (game.isStarted && game.hands && game.hands.has(playerId)) {
+            const h = game.hands.get(playerId);
+            socket.emit('privateHand', {
+                hand: h.map(c => ({ name: c.name, value: c.value }))
+            });
+        }
+
         console.log(`Reconnected ${player.nickname} to game: ${joinKey}`);
     });
 
@@ -227,11 +260,13 @@ socket.on('sendMessage', (data) => {
 socket.on('startReady', (data) => {
     const { playerId } = data;
     for (const [key, game] of games) {
-        if (game.players[0].id === playerId && !game.readyPhase && !game.isStarted && game.players.length >= 2) {
+        if (game.players && game.players.length >= 2 && game.players[0] && game.players[0].id === playerId && !game.readyPhase && !game.isStarted) {
             game.readyPhase = true;
             game.readyPlayers.clear();
+            game.readyPlayers.add(playerId);
             game.lastActivity = Date.now();
             io.to(key).emit('readyPhaseStarted');
+            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
             console.log(`Ready phase started for game: ${key}`);
             break;
         }
@@ -250,10 +285,11 @@ socket.on('toggleReady', (data) => {
                 game.readyPlayers.add(playerId);
             }
             game.lastActivity = Date.now();
-            io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
-            // Check if all ready
+            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+            // Auto-start when all ready
             if (game.readyPlayers.size === game.players.length) {
                 initializeGame(game, key);
+                console.log(`Game auto-started for ${key}`);
             }
             console.log(`Player ${playerId} toggled ready in game: ${key}`);
             break;
@@ -261,164 +297,549 @@ socket.on('toggleReady', (data) => {
     }
 });
 
-// Initialize game function
-function initializeGame(game, key) {
-    // Ported from loveletter.py
-    const CARDS = {
-        'Princess': { count: 1, value: 8 },
-        'Countess': { count: 1, value: 7 },
-        'King': { count: 1, value: 6 },
-        'Prince': { count: 2, value: 5 },
-        'Handmaiden': { count: 2, value: 4 },
-        'Baron': { count: 2, value: 3 },
-        'Priest': { count: 2, value: 2 },
-        'Guard': { count: 5, value: 1 }
-    };
+// Play a card (core game action)
+socket.on('playCard', (data) => {
+    const { playerId, cardIndex, targetPlayerId, guess } = data;
+    for (const [key, game] of games) {
+        if (!game.isStarted || game.roundOver) continue;
 
-    class Card {
-        constructor(name, value) {
-            this.name = name;
-            this.value = value;
+        const pIdx = game.players.findIndex(pp => pp.id === playerId);
+        if (pIdx === -1) continue;
+
+        if (game.currentPlayerId !== playerId) {
+            // Not your turn
+            socket.emit('error', 'Not your turn');
+            break;
+        }
+        if (game.eliminated.has(playerId)) {
+            socket.emit('error', 'You are out of this round');
+            break;
+        }
+
+        const hand = game.hands.get(playerId) || [];
+        if (cardIndex < 0 || cardIndex >= hand.length) {
+            socket.emit('error', 'Invalid card selection');
+            break;
+        }
+
+        const cardToPlay = hand[cardIndex];
+
+        // Countess rule enforcement: if holding Countess + (King or Prince), must play Countess
+        const hasCountess = hand.some(c => c.name === 'Countess');
+        const hasRoyal = hand.some(c => c.name === 'King' || c.name === 'Prince');
+        if (hasCountess && hasRoyal && cardToPlay.name !== 'Countess') {
+            socket.emit('error', 'You must play the Countess when holding it with King or Prince');
+            break;
+        }
+
+        // Validate target for cards that require one
+        const needsTarget = ['Guard', 'Priest', 'Baron', 'King'].includes(cardToPlay.name);
+        const allowsSelf = cardToPlay.name === 'Prince';
+
+        if (needsTarget && targetPlayerId) {
+            // Only validate if a target was actually chosen.
+            // If no target (all others protected/eliminated), we allow the play — effect will fizzle.
+            if (targetPlayerId === playerId && !allowsSelf) {
+                socket.emit('error', 'This card requires a different target player');
+                break;
+            }
+            const target = game.players.find(pp => pp.id === targetPlayerId);
+            if (!target || game.eliminated.has(targetPlayerId) || game.protected.has(targetPlayerId)) {
+                socket.emit('error', 'Invalid or protected target');
+                break;
+            }
+        }
+
+        if (cardToPlay.name === 'Guard' && guess === 'Guard') {
+            socket.emit('error', 'Cannot guess Guard');
+            break;
+        }
+
+        // All checks passed — perform the play
+        const playedCard = hand.splice(cardIndex, 1)[0];
+
+        // Record
+        if (!game.discards.has(playerId)) game.discards.set(playerId, []);
+        game.discards.get(playerId).push(playedCard);
+        game.lastPlayed.set(playerId, playedCard);
+        game.lastActivity = Date.now();
+
+        const actor = game.players[pIdx];
+
+        // Send updated hand to the player who just played (they now have one less card)
+        const updatedHand = game.hands.get(playerId) || [];
+        io.to(playerId).emit('privateHand', {
+            hand: updatedHand.map(c => ({ name: c.name, value: c.value }))
+        });
+
+        // Public announcement of the play
+        io.to(key).emit('cardPlayed', {
+            playerId,
+            nickname: actor.nickname,
+            card: { name: playedCard.name, value: playedCard.value },
+            targetPlayerId: targetPlayerId || null,
+            guess: guess || null
+        });
+
+        // Resolve effect (may eliminate, reveal, swap, etc.)
+        resolveCardEffect(game, key, playerId, playedCard, targetPlayerId, guess);
+
+        // If the player who just acted is still in and round not over, their turn ends
+        if (!game.roundOver) {
+            advanceToNextPlayer(game, key);
+        }
+
+        break;
+    }
+});
+
+// Safety net: client can request their current hand (e.g. if a privateHand was missed on round start or reconnect)
+socket.on('getMyHand', (data) => {
+    const { playerId } = data;
+    for (const [key, game] of games) {
+        if (game.isStarted && game.hands && game.hands.has(playerId)) {
+            const h = game.hands.get(playerId);
+            socket.emit('privateHand', {
+                hand: h.map(c => ({ name: c.name, value: c.value }))
+            });
+            break;
         }
     }
+});
 
-    game.deck = [];
-    for (const [name, info] of Object.entries(CARDS)) {
-        for (let i = 0; i < info.count; i++) {
-            game.deck.push(new Card(name, info.value));
-        }
+// Card definitions (standard Love Letter)
+const CARD_DEFS = {
+    'Guard':     { count: 5, value: 1, effect: 'guard' },
+    'Priest':    { count: 2, value: 2, effect: 'priest' },
+    'Baron':     { count: 2, value: 3, effect: 'baron' },
+    'Handmaid':  { count: 2, value: 4, effect: 'handmaid' },
+    'Prince':    { count: 2, value: 5, effect: 'prince' },
+    'King':      { count: 1, value: 6, effect: 'king' },
+    'Countess':  { count: 1, value: 7, effect: 'countess' },
+    'Princess':  { count: 1, value: 8, effect: 'princess' }
+};
+
+class Card {
+    constructor(name, value) {
+        this.name = name;
+        this.value = value;
     }
-
-    // Shuffle deck
-    game.deck.sort(() => Math.random() - 0.5);
-
-    // Burn first card
-    game.burnedCard = game.deck.shift();
-
-    // Deal one card to each player
-    game.hands = new Map();
-    game.players.forEach(player => {
-        const card = game.deck.shift();
-        game.hands.set(player.id, [card]);
-    });
-
-    // Pick random starting player
-    const randomIndex = Math.floor(Math.random() * game.players.length);
-    game.currentPlayerId = game.players[randomIndex].id;
-
-    game.isStarted = true;
-    game.readyPhase = false;
-    game.lastActivity = Date.now();
-
-    // Broadcast public state
-    io.to(key).emit('gameStarted', { currentPlayerId: game.currentPlayerId, burnedCard: { name: game.burnedCard.name, value: game.burnedCard.value } });
-
-    // Send private hands
-    game.players.forEach(player => {
-        const hand = game.hands.get(player.id);
-        io.to(player.id).emit('privateHand', { hand: hand.map(c => ({ name: c.name, value: c.value })) });
-    });
-
-    console.log(`Game started for ${key}, starting player: ${game.currentPlayerId}`);
 }
 
-// Start ready phase
-socket.on('startReady', (data) => {
-    const { playerId } = data;
-    for (const [key, game] of games) {
-        if (game.players[0].id === playerId && !game.readyPhase && !game.isStarted && game.players.length >= 2) {
-            game.readyPhase = true;
-            game.readyPlayers.clear();
-            game.lastActivity = Date.now();
-            io.to(key).emit('readyPhaseStarted');
-            console.log(`Ready phase started for game: ${key}`);
-            break;
-        }
-    }
-});
-
-// Toggle ready
-socket.on('toggleReady', (data) => {
-    const { playerId } = data;
-    for (const [key, game] of games) {
-        const player = game.players.find(p => p.id === playerId);
-        if (player && game.readyPhase && !game.isStarted) {
-            if (game.readyPlayers.has(playerId)) {
-                game.readyPlayers.delete(playerId);
-            } else {
-                game.readyPlayers.add(playerId);
-            }
-            game.lastActivity = Date.now();
-            io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
-            // Check if all ready
-            if (game.readyPlayers.size === game.players.length) {
-                initializeGame(game, key);
-            }
-            console.log(`Player ${playerId} toggled ready in game: ${key}`);
-            break;
-        }
-    }
-});
-
-// Initialize game function
-function initializeGame(game, key) {
-    // Ported from loveletter.py
-    const CARDS = {
-        'Princess': { count: 1, value: 8 },
-        'Countess': { count: 1, value: 7 },
-        'King': { count: 1, value: 6 },
-        'Prince': { count: 2, value: 5 },
-        'Handmaiden': { count: 2, value: 4 },
-        'Baron': { count: 2, value: 3 },
-        'Priest': { count: 2, value: 2 },
-        'Guard': { count: 5, value: 1 }
-    };
-
-    class Card {
-        constructor(name, value) {
-            this.name = name;
-            this.value = value;
-        }
-    }
-
-    game.deck = [];
-    for (const [name, info] of Object.entries(CARDS)) {
+function buildAndShuffleDeck() {
+    const deck = [];
+    for (const [name, info] of Object.entries(CARD_DEFS)) {
         for (let i = 0; i < info.count; i++) {
-            game.deck.push(new Card(name, info.value));
+            deck.push(new Card(name, info.value));
         }
     }
+    // Fisher-Yates shuffle
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+}
 
-    // Shuffle deck
-    game.deck.sort(() => Math.random() - 0.5);
-
-    // Burn first card
-    game.burnedCard = game.deck.shift();
-
-    // Deal one card to each player
-    game.hands = new Map();
-    game.players.forEach(player => {
-        const card = game.deck.shift();
-        game.hands.set(player.id, [card]);
-    });
-
-    // Pick random starting player
-    const randomIndex = Math.floor(Math.random() * game.players.length);
-    game.currentPlayerId = game.players[randomIndex].id;
-
+// Start a brand new match (first round)
+function initializeGame(game, key) {
+    game.tokens = new Map();
+    game.players.forEach(p => game.tokens.set(p.id, 0));
+    game.roundNumber = 1;
     game.isStarted = true;
     game.readyPhase = false;
     game.lastActivity = Date.now();
+    game.discards = new Map();
+    game.lastPlayed = new Map();
+    game.protected = new Set();
+    game.eliminated = new Set();
+    game.roundOver = false;
 
-    // Broadcast public state
-    io.to(key).emit('gameStarted', { currentPlayerId: game.currentPlayerId });
+    startNewRound(game, key, true);
+}
 
-    // Send private hands
+// Start (or restart) a single round within the match
+function startNewRound(game, key, isFirstRound = false) {
+    game.deck = buildAndShuffleDeck();
+    game.removedCard = game.deck.shift(); // burned/removed card for the round
+    game.hands = new Map();
+    game.discards = new Map();
+    game.protected = new Set();
+    game.eliminated = new Set();
+    game.lastPlayed = new Map();
+    game.roundOver = false;
+
+    // Deal 1 card to each player (who is still in the overall game)
     game.players.forEach(player => {
-        const hand = game.hands.get(player.id);
-        io.to(player.id).emit('privateHand', { hand: hand.map(c => ({ name: c.name, value: c.value })) });
+        if (game.deck.length > 0) {
+            const c = game.deck.shift();
+            game.hands.set(player.id, [c]);
+        } else {
+            game.hands.set(player.id, []);
+        }
     });
 
-    console.log(`Game started for ${key}, starting player: ${game.currentPlayerId}`);
+    // Choose starting player: for first round random, otherwise previous round winner or random among remaining
+    let startIdx = Math.floor(Math.random() * game.players.length);
+    if (!isFirstRound && game.lastRoundWinnerId) {
+        const wIdx = game.players.findIndex(p => p.id === game.lastRoundWinnerId);
+        if (wIdx !== -1) startIdx = wIdx;
+    }
+    game.currentPlayerId = game.players[startIdx].id;
+
+    game.lastActivity = Date.now();
+
+    // Broadcast round start
+    io.to(key).emit('roundStarted', {
+        roundNumber: game.roundNumber,
+        currentPlayerId: game.currentPlayerId,
+        removedCard: { name: game.removedCard.name, value: game.removedCard.value }, // visible only for flavor / future tiebreak
+        tokens: Object.fromEntries(game.tokens)
+    });
+
+    // Private initial hands
+    game.players.forEach(player => {
+        const h = game.hands.get(player.id) || [];
+        io.to(player.id).emit('privateHand', { hand: h.map(c => ({ name: c.name, value: c.value })) });
+    });
+
+    // Make the first player draw to start their turn (standard flow)
+    setTimeout(() => {
+        if (!game.roundOver && game.isStarted) {
+            drawForPlayer(game, key, game.currentPlayerId);
+        }
+    }, 50);
+
+    console.log(`Round ${game.roundNumber} started for ${key}, first player: ${game.currentPlayerId}`);
+}
+
+function drawForPlayer(game, key, playerId) {
+    if (game.roundOver || game.eliminated.has(playerId) || !game.hands.has(playerId)) return;
+
+    if (game.deck.length === 0) {
+        endRound(game, key);
+        return;
+    }
+
+    const drawn = game.deck.shift();
+    const hand = game.hands.get(playerId);
+    hand.push(drawn);
+
+    // Protection drops at the start of your turn
+    game.protected.delete(playerId);
+
+    // Send updated private hand to the player
+    io.to(playerId).emit('privateHand', {
+        hand: hand.map(c => ({ name: c.name, value: c.value }))
+    });
+
+    // Notify everyone that the player drew (card hidden)
+    const p = game.players.find(pp => pp.id === playerId);
+    io.to(key).emit('playerDrew', { playerId, nickname: p ? p.nickname : '' });
+
+    // If after draw they have Countess + King/Prince, they are forced to play Countess (client can enforce too)
+    // But server will enforce on playCard
+
+    io.to(key).emit('turnChanged', { currentPlayerId: playerId });
+}
+
+function advanceToNextPlayer(game, key) {
+    if (game.roundOver) return;
+
+    const activePlayers = game.players.filter(p => !game.eliminated.has(p.id));
+    if (activePlayers.length <= 1) {
+        endRound(game, key);
+        return;
+    }
+
+    // If no cards left in deck at the start of someone's turn, round ends
+    if (game.deck.length === 0) {
+        endRound(game, key);
+        return;
+    }
+
+    let idx = game.players.findIndex(p => p.id === game.currentPlayerId);
+    let attempts = 0;
+    do {
+        idx = (idx + 1) % game.players.length;
+        const candidate = game.players[idx];
+        if (!game.eliminated.has(candidate.id)) {
+            game.currentPlayerId = candidate.id;
+            break;
+        }
+        attempts++;
+        if (attempts > game.players.length * 2) break; // safety
+    } while (true);
+
+    // Draw for the new current player (this also drops their protection)
+    drawForPlayer(game, key, game.currentPlayerId);
+}
+
+function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
+    const effect = CARD_DEFS[playedCard.name] ? CARD_DEFS[playedCard.name].effect : null;
+    if (!effect) return;
+
+    const actor = game.players.find(p => p.id === actorId);
+    if (!actor) return;
+
+    switch (effect) {
+        case 'princess':
+            // Playing Princess eliminates you
+            game.eliminated.add(actorId);
+            io.to(key).emit('playerEliminated', { playerId: actorId, nickname: actor.nickname, reason: 'Princess' });
+            checkRoundEndAfterElimination(game, key);
+            break;
+
+        case 'handmaid':
+            game.protected.add(actorId);
+            io.to(key).emit('playerProtected', { playerId: actorId, nickname: actor.nickname });
+            break;
+
+        case 'countess':
+            // No special effect, just played
+            break;
+
+        case 'guard': {
+            if (!targetId || !guess) return;
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            const targetPlayer = game.players.find(p => p.id === targetId);
+            const targetHand = game.hands.get(targetId) || [];
+            const correct = targetHand.some(c => c.name === guess);
+            if (correct) {
+                game.eliminated.add(targetId);
+                io.to(key).emit('playerEliminated', { playerId: targetId, nickname: targetPlayer ? targetPlayer.nickname : '', reason: `Guard guessed ${guess}` });
+                io.to(key).emit('guardSuccess', { actorId, targetId, guess });
+                checkRoundEndAfterElimination(game, key);
+            } else {
+                io.to(key).emit('guardFail', { actorId, targetId, guess });
+            }
+            break;
+        }
+
+        case 'priest': {
+            if (!targetId) return;
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            const targetPlayer = game.players.find(p => p.id === targetId);
+            const targetHand = (game.hands.get(targetId) || []).map(c => ({ name: c.name, value: c.value }));
+            // Only the actor sees the hand
+            io.to(actorId).emit('priestReveal', {
+                targetId,
+                nickname: targetPlayer ? targetPlayer.nickname : '',
+                hand: targetHand
+            });
+            io.to(key).emit('priestUsed', { actorId, actorNick: actor.nickname, targetId });
+            break;
+        }
+
+        case 'baron': {
+            if (!targetId) return;
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            const targetPlayer = game.players.find(p => p.id === targetId);
+            const actorHand = game.hands.get(actorId) || [];
+            const tHand = game.hands.get(targetId) || [];
+            const actorCard = actorHand[0];
+            const targetCard = tHand[0];
+            if (!actorCard || !targetCard) return;
+
+            // Reveal both cards publicly for the comparison
+            io.to(key).emit('baronCompare', {
+                actorId,
+                actorNick: actor.nickname,
+                actorCard: { name: actorCard.name, value: actorCard.value },
+                targetId,
+                targetNick: targetPlayer ? targetPlayer.nickname : '',
+                targetCard: { name: targetCard.name, value: targetCard.value }
+            });
+
+            if (actorCard.value > targetCard.value) {
+                game.eliminated.add(targetId);
+                io.to(key).emit('playerEliminated', { playerId: targetId, nickname: targetPlayer.nickname, reason: 'Baron' });
+            } else if (targetCard.value > actorCard.value) {
+                game.eliminated.add(actorId);
+                io.to(key).emit('playerEliminated', { playerId: actorId, nickname: actor.nickname, reason: 'Baron' });
+            }
+            checkRoundEndAfterElimination(game, key);
+            break;
+        }
+
+        case 'prince': {
+            const princeTarget = targetId || actorId; // default to self if none provided
+            if (game.eliminated.has(princeTarget)) return;
+            const tPlayer = game.players.find(p => p.id === princeTarget);
+            const tHand = game.hands.get(princeTarget) || [];
+            if (tHand.length === 0) break;
+
+            // Discard current hand
+            const discarded = tHand.shift();
+            if (!game.discards.has(princeTarget)) game.discards.set(princeTarget, []);
+            game.discards.get(princeTarget).push(discarded);
+
+            if (discarded.name === 'Princess') {
+                game.eliminated.add(princeTarget);
+                io.to(key).emit('playerEliminated', { playerId: princeTarget, nickname: tPlayer ? tPlayer.nickname : '', reason: 'Prince forced Princess' });
+            } else {
+                // Draw a replacement if possible
+                if (game.deck.length > 0) {
+                    const newCard = game.deck.shift();
+                    tHand.push(newCard);
+                } else if (game.removedCard) {
+                    // Use the removed card as last resort (some house rules)
+                    tHand.push(game.removedCard);
+                    game.removedCard = null;
+                }
+            }
+
+            // Notify the target of their new hand (if not eliminated)
+            if (!game.eliminated.has(princeTarget)) {
+                io.to(princeTarget).emit('privateHand', {
+                    hand: tHand.map(c => ({ name: c.name, value: c.value }))
+                });
+            }
+
+            io.to(key).emit('princeEffect', {
+                actorId,
+                actorNick: actor.nickname,
+                targetId: princeTarget,
+                targetNick: tPlayer ? tPlayer.nickname : '',
+                discarded: { name: discarded.name, value: discarded.value }
+            });
+
+            checkRoundEndAfterElimination(game, key);
+            break;
+        }
+
+        case 'king': {
+            if (!targetId || targetId === actorId) return;
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+
+            const targetPlayer = game.players.find(p => p.id === targetId);
+            const actorHand = game.hands.get(actorId) || [];
+            const tHand = game.hands.get(targetId) || [];
+
+            // Swap
+            game.hands.set(actorId, tHand);
+            game.hands.set(targetId, actorHand);
+
+            // Send new private hands
+            io.to(actorId).emit('privateHand', {
+                hand: tHand.map(c => ({ name: c.name, value: c.value }))
+            });
+            io.to(targetId).emit('privateHand', {
+                hand: actorHand.map(c => ({ name: c.name, value: c.value }))
+            });
+
+            io.to(key).emit('kingSwap', {
+                actorId,
+                actorNick: actor.nickname,
+                targetId,
+                targetNick: targetPlayer ? targetPlayer.nickname : ''
+            });
+            break;
+        }
+    }
+}
+
+function checkRoundEndAfterElimination(game, key) {
+    const stillActive = game.players.filter(p => !game.eliminated.has(p.id));
+    if (stillActive.length <= 1) {
+        endRound(game, key);
+    }
+}
+
+function endRound(game, key) {
+    if (game.roundOver) return;
+    game.roundOver = true;
+
+    const active = game.players.filter(p => !game.eliminated.has(p.id));
+
+    let roundWinner = null;
+    if (active.length === 1) {
+        roundWinner = active[0];
+    } else if (active.length > 1) {
+        // Compare hands (highest value wins). Simple tie-break: first in list with the max value
+        let bestValue = -1;
+        let winners = [];
+        active.forEach(pl => {
+            const h = game.hands.get(pl.id) || [];
+            const val = h.length > 0 ? h[0].value : 0;
+            if (val > bestValue) {
+                bestValue = val;
+                winners = [pl];
+            } else if (val === bestValue) {
+                winners.push(pl);
+            }
+        });
+        if (winners.length === 1) {
+            roundWinner = winners[0];
+        } else {
+            // Tie: use lastPlayed value as tiebreaker if available, otherwise pick first
+            let bestLast = -1;
+            let tieWinners = [];
+            winners.forEach(pl => {
+                const last = game.lastPlayed.get(pl.id);
+                const v = last ? last.value : 0;
+                if (v > bestLast) {
+                    bestLast = v;
+                    tieWinners = [pl];
+                } else if (v === bestLast) {
+                    tieWinners.push(pl);
+                }
+            });
+            roundWinner = tieWinners.length > 0 ? tieWinners[0] : winners[0];
+        }
+    }
+
+    // Award token
+    if (roundWinner) {
+        const current = game.tokens.get(roundWinner.id) || 0;
+        game.tokens.set(roundWinner.id, current + 1);
+        game.lastRoundWinnerId = roundWinner.id;
+    }
+
+    // Reveal all remaining hands + the removed card
+    const revealed = {};
+    game.players.forEach(pl => {
+        const h = game.hands.get(pl.id) || [];
+        revealed[pl.id] = h.map(c => ({ name: c.name, value: c.value }));
+    });
+
+    io.to(key).emit('roundEnded', {
+        roundNumber: game.roundNumber,
+        winnerId: roundWinner ? roundWinner.id : null,
+        winnerNickname: roundWinner ? roundWinner.nickname : null,
+        revealed,
+        removedCard: game.removedCard ? { name: game.removedCard.name, value: game.removedCard.value } : null,
+        tokens: Object.fromEntries(game.tokens)
+    });
+
+    // Check for match win (first to 3 tokens)
+    let matchWinner = null;
+    for (const [pid, t] of game.tokens) {
+        if (t >= 3) {
+            matchWinner = game.players.find(p => p.id === pid);
+            break;
+        }
+    }
+
+    if (matchWinner) {
+        io.to(key).emit('gameOver', {
+            winnerId: matchWinner.id,
+            winnerNickname: matchWinner.nickname,
+            finalTokens: Object.fromEntries(game.tokens)
+        });
+        // Optionally keep the game object for a bit or delete
+        setTimeout(() => games.delete(key), 30000);
+        return;
+    }
+
+    // Start next round automatically after a short pause
+    game.roundNumber += 1;
+    setTimeout(() => {
+        if (games.has(key) && game.isStarted && !game.roundOver) {
+            // roundOver will be reset inside startNewRound
+            startNewRound(game, key, false);
+        }
+    }, 4000);
 }
 
 // Handle disconnection
@@ -430,6 +851,9 @@ socket.on('disconnect', () => {
         if (index !== -1) {
             game.players.splice(index, 1);
             game.readyPlayers.delete(socket.playerId);
+            game.eliminated && game.eliminated.delete(socket.playerId);
+            game.protected && game.protected.delete(socket.playerId);
+            game.hands && game.hands.delete(socket.playerId);
             game.lastActivity = Date.now();
             socket.to(key).emit('playerLeft', { players: game.players });
             // If creator left
@@ -439,10 +863,27 @@ socket.on('disconnect', () => {
             } else if (game.players.length === 0) {
                 games.delete(key);
             } else if (game.readyPhase) {
-                io.to(key).emit('readyUpdate', { readyPlayers: Array.from(game.readyPlayers) });
-            } else if (game.isStarted && game.players.length < 2) {
-                io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
-                games.delete(key);
+                io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+            } else if (game.isStarted) {
+                if (game.players.length < 2) {
+                    io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
+                    games.delete(key);
+                } else {
+                    // If it was their turn, advance
+                    if (game.currentPlayerId === socket.playerId) {
+                        // Pick next non-eliminated
+                        const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
+                        if (active.length > 0) {
+                            game.currentPlayerId = active[0].id;
+                            io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
+                            // draw for them if possible
+                            if (!game.roundOver && game.deck && game.deck.length > 0) {
+                                drawForPlayer(game, key, game.currentPlayerId);
+                            }
+                        }
+                    }
+                    io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                }
             }
             break;
         }

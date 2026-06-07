@@ -2,7 +2,7 @@ console.log('Script loaded');
 const socket = io();
 console.log('Socket created, connected:', socket.connected);
 
-// Generate or get persistent player ID
+// Per-tab player ID (sessionStorage isolates tabs/windows for multi-user testing)
 const playerId = sessionStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
 sessionStorage.setItem('playerId', playerId);
 
@@ -23,66 +23,51 @@ const toggleReadyButton = document.getElementById('toggleReady');
 const readyStatusDiv = document.getElementById('readyStatus');
 const gameModeDiv = document.getElementById('gameMode');
 const handSpan = document.getElementById('hand');
+const handContainer = document.getElementById('handContainer');
 const currentTurnSpan = document.getElementById('currentTurn');
-let joined = false;
+const actionArea = document.getElementById('actionArea');
+const targetSelector = document.getElementById('targetSelector');
+const targetButtons = document.getElementById('targetButtons');
+const guessSelector = document.getElementById('guessSelector');
+const guessButtons = document.getElementById('guessButtons');
 
-// Generate or get persistent player ID
-const playerId = localStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
-localStorage.setItem('playerId', playerId);
-    // Switch to game view
-    document.querySelector('.container').style.display = 'none';
-    document.getElementById('gameSection').style.display = 'block';
-    console.log('Setting joinKey to', data.joinKey);
-    const joinKeyEl = document.getElementById('joinKey');
-    if (joinKeyEl) {
-        joinKeyEl.textContent = 'Join Key: ' + data.joinKey;
-        console.log('Join key element updated:', joinKeyEl.textContent);
-        console.log('Element HTML:', joinKeyEl.outerHTML);
-    } else {
-        console.error('Join key element not found');
-    }
-    updatePlayers(data.players, data.readyPlayers, data.currentPlayerId, data.isStarted);
-    if (data.isStarted) {
-        gameModeDiv.style.display = 'block';
-        currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
-    } else {
-        gameModeDiv.style.display = 'none';
-    }
-    if (data.readyPhase) {
-        toggleReadyButton.style.display = 'block';
-        readyStatusDiv.style.display = 'block';
-        // Set button text based on if ready
-        if (data.readyPlayers.includes(playerId)) {
-            toggleReadyButton.textContent = 'Unready';
-        } else {
-            toggleReadyButton.textContent = 'Ready';
-        }
-    } else {
-        toggleReadyButton.style.display = 'none';
-        readyStatusDiv.style.display = 'none';
-    }
-    if (data.players[0].id === playerId && !data.readyPhase && !data.isStarted && data.players.length >= 2) {
-        startReadyButton.style.display = 'block';
-    } else {
-        startReadyButton.style.display = 'none';
-    }
-    joined = true;
-});
+let joined = false;
+let currentHand = [];
+let myTokens = 0;
+let pendingPlay = null; // { cardIndex, cardName }
+let gameTokens = {}; // playerId -> tokens
+let eliminatedPlayers = new Set();
+let protectedPlayers = new Set();
+let currentTurnPlayerId = null;
+let currentPlayers = [];
 
 socket.on('playerJoined', (data) => {
+    currentPlayers = data.players || [];
     updatePlayers(data.players);
 });
 
 socket.on('readyPhaseStarted', () => {
-    toggleReadyButton.style.display = 'block';
-    toggleReadyButton.textContent = 'Ready';
     readyStatusDiv.style.display = 'block';
     readyStatusDiv.textContent = 'Waiting for all players to ready up...';
+    const isCreator = currentPlayers.length > 0 && currentPlayers[0].id === playerId;
+    if (isCreator) {
+        toggleReadyButton.style.display = 'none';
+    } else {
+        toggleReadyButton.style.display = 'block';
+        toggleReadyButton.textContent = 'Ready';
+    }
 });
 
 socket.on('readyUpdate', (data) => {
-    updatePlayers(data.players, data.readyPlayers);
-    readyStatusDiv.textContent = `Ready: ${data.readyPlayers.length} / ${data.players.length}`;
+    if (!data || !data.players) return;
+    updatePlayers(data.players, data.readyPlayers || []);
+    const readyCount = Array.isArray(data.readyPlayers) ? data.readyPlayers.length : 0;
+    readyStatusDiv.textContent = `Ready: ${readyCount} / ${data.players.length}`;
+    // Sync button text for non-creator players
+    if (toggleReadyButton.style.display !== 'none') {
+        const isMeReady = Array.isArray(data.readyPlayers) && data.readyPlayers.includes(playerId);
+        toggleReadyButton.textContent = isMeReady ? 'Unready' : 'Ready';
+    }
 });
 
 socket.on('gameStarted', (data) => {
@@ -90,18 +75,152 @@ socket.on('gameStarted', (data) => {
     startReadyButton.style.display = 'none';
     toggleReadyButton.style.display = 'none';
     readyStatusDiv.style.display = 'none';
-    currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
-    updatePlayers(data.players, [], data.currentPlayerId, true);
+    actionArea.style.display = 'none';
+    console.log('gameStarted received', data);
+    if (data.currentPlayerId) {
+        currentTurnSpan.textContent = 'Player ' + data.currentPlayerId;
+    }
 });
 
 socket.on('privateHand', (data) => {
-    handSpan.textContent = data.hand.map(c => `${c.name} (${c.value})`).join(', ');
+    currentHand = data.hand || [];
+    renderHand();
+    // Re-evaluate action buttons in case this hand update happened on our turn
+    const isMyTurn = currentTurnPlayerId === playerId;
+    actionArea.style.display = isMyTurn && currentHand.length > 0 ? 'block' : 'none';
+});
+
+socket.on('roundStarted', (data) => {
+    console.log('roundStarted', data);
+    gameModeDiv.style.display = 'block';
+    actionArea.style.display = 'none';
+    targetSelector.style.display = 'none';
+    guessSelector.style.display = 'none';
+    pendingPlay = null;
+    eliminatedPlayers = new Set();
+    protectedPlayers = new Set();
+    gameTokens = data.tokens || {};
+    currentTurnPlayerId = data.currentPlayerId || null;
+    currentHand = [];  // ensure clean slate for new round
+    if (handContainer) handContainer.innerHTML = '';
+
+    // Hide all pre-game / ready controls now that we're in the actual game
+    startReadyButton.style.display = 'none';
+    toggleReadyButton.style.display = 'none';
+    readyStatusDiv.style.display = 'none';
+
+    const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
+    currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
+
+    if (currentPlayers.length > 0) {
+        updatePlayers(currentPlayers, [], currentTurnPlayerId);
+    }
+    renderHand();
+
+    // Safety net: if we didn't receive our initial hand for some reason (race, reconnect, etc.),
+    // request it after a short delay. This especially helps the game creator after auto-start.
+    setTimeout(() => {
+        if (currentHand.length === 0) {
+            socket.emit('getMyHand', { playerId });
+        }
+    }, 350);
+});
+
+socket.on('turnChanged', (data) => {
+    currentTurnPlayerId = data.currentPlayerId || null;
+    const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
+    currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
+    const isMyTurn = currentTurnPlayerId === playerId;
+    actionArea.style.display = isMyTurn && currentHand.length > 0 ? 'block' : 'none';
+    if (!isMyTurn) {
+        targetSelector.style.display = 'none';
+        guessSelector.style.display = 'none';
+        pendingPlay = null;
+    }
+    updatePlayers(currentPlayers, [], currentTurnPlayerId);
+    renderHand();
+});
+
+socket.on('playerDrew', (data) => {
+    // Just informational; hand updated via privateHand
+    console.log(data.nickname + ' drew a card');
+});
+
+socket.on('cardPlayed', (data) => {
+    const msg = `${data.nickname} played ${data.card.name}`;
+    addMessage(msg);
+    // If it was us, clear pending
+    if (data.playerId === playerId) {
+        pendingPlay = null;
+        targetSelector.style.display = 'none';
+        guessSelector.style.display = 'none';
+    }
+});
+
+socket.on('playerEliminated', (data) => {
+    eliminatedPlayers.add(data.playerId);
+    addMessage(`${data.nickname} is out${data.reason ? ' (' + data.reason + ')' : ''}`);
+    updatePlayers(currentPlayers, [], null);
+});
+
+socket.on('playerProtected', (data) => {
+    protectedPlayers.add(data.playerId);
+    addMessage(`${data.nickname} is protected by Handmaid`);
+    updatePlayers(currentPlayers, [], null);
+});
+
+socket.on('guardSuccess', (data) => {
+    addMessage(`Guard guess correct!`);
+});
+
+socket.on('guardFail', (data) => {
+    addMessage(`Guard guess failed.`);
+});
+
+socket.on('priestReveal', (data) => {
+    const handStr = data.hand.map(c => `${c.name}(${c.value})`).join(', ');
+    alert(`Priest: ${data.nickname}'s hand: ${handStr}`);
+    addMessage(`You saw ${data.nickname}'s hand via Priest.`);
+});
+
+socket.on('baronCompare', (data) => {
+    addMessage(`Baron compare: ${data.actorNick} ${data.actorCard.name} vs ${data.targetNick} ${data.targetCard.name}`);
+});
+
+socket.on('princeEffect', (data) => {
+    addMessage(`Prince: ${data.targetNick} discarded ${data.discarded.name}`);
+});
+
+socket.on('kingSwap', (data) => {
+    addMessage(`King: ${data.actorNick} swapped hands with ${data.targetNick}`);
+});
+
+socket.on('roundEnded', (data) => {
+    const winnerText = data.winnerNickname ? `${data.winnerNickname} wins the round!` : 'Round ended in a tie.';
+    addMessage(`Round ${data.roundNumber} over. ${winnerText}`);
+    // Show quick summary of revealed hands (optional)
+    console.log('Revealed hands:', data.revealed);
+    gameTokens = data.tokens || {};
+    updatePlayers(currentPlayers, [], null);
+});
+
+socket.on('gameOver', (data) => {
+    alert(`Game Over! ${data.winnerNickname} wins with ${data.finalTokens[data.winnerId]} tokens.`);
+    // Reset UI to lobby
+    document.getElementById('gameSection').style.display = 'none';
+    document.querySelector('.container').style.display = 'block';
+    joined = false;
+    chatMessages.innerHTML = '';
+    playerList.innerHTML = '';
+    document.getElementById('joinKey').textContent = 'Join Key: ';
+    gameModeDiv.style.display = 'none';
+    actionArea.style.display = 'none';
 });
 
 socket.on('gameEnded', (data) => {
     alert(data.message);
-    localStorage.removeItem('gameKey');
-    localStorage.removeItem('playerId');
+    sessionStorage.removeItem('gameKey');
+    sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.querySelector('.container').style.display = 'block';
@@ -114,56 +233,11 @@ socket.on('gameEnded', (data) => {
 });
 
 startReadyButton.addEventListener('click', () => {
-    socket.emit('startReady', { playerId });
-});
-
-toggleReadyButton.addEventListener('click', () => {
-    socket.emit('toggleReady', { playerId });
-    toggleReadyButton.textContent = toggleReadyButton.textContent === 'Ready' ? 'Unready' : 'Ready';
-});
-
-socket.on('readyPhaseStarted', () => {
-    toggleReadyButton.style.display = 'block';
-    toggleReadyButton.textContent = 'Ready';
-    readyStatusDiv.style.display = 'block';
-    readyStatusDiv.textContent = 'Waiting for all players to ready up...';
-});
-
-socket.on('readyUpdate', (data) => {
-    updatePlayers(data.players, data.readyPlayers);
-    readyStatusDiv.textContent = `Ready: ${data.readyPlayers.length} / ${data.players.length}`;
-});
-
-socket.on('gameStarted', (data) => {
-    gameModeDiv.style.display = 'block';
-    startReadyButton.style.display = 'none';
-    toggleReadyButton.style.display = 'none';
-    readyStatusDiv.style.display = 'none';
-    currentTurnSpan.textContent = data.players.find(p => p.id === data.currentPlayerId).nickname;
-    updatePlayers(data.players, [], data.currentPlayerId, true);
-});
-
-socket.on('privateHand', (data) => {
-    handSpan.textContent = data.hand.map(c => `${c.name} (${c.value})`).join(', ');
-});
-
-socket.on('gameEnded', (data) => {
-    alert(data.message);
-    localStorage.removeItem('gameKey');
-    localStorage.removeItem('playerId');
-    // Switch to lobby
-    document.getElementById('gameSection').style.display = 'none';
-    document.querySelector('.container').style.display = 'block';
-    joined = false;
-    // Clear UI
-    chatMessages.innerHTML = '';
-    playerList.innerHTML = '';
-    document.getElementById('joinKey').textContent = 'Join Key: ';
-    gameModeDiv.style.display = 'none';
-});
-
-startReadyButton.addEventListener('click', () => {
-    socket.emit('startReady', { playerId });
+    if (startReadyButton.textContent === 'Start Game') {
+        socket.emit('startGame', { playerId });
+    } else {
+        socket.emit('startReady', { playerId });
+    }
 });
 
 toggleReadyButton.addEventListener('click', () => {
@@ -172,6 +246,7 @@ toggleReadyButton.addEventListener('click', () => {
 });
 
 socket.on('playerLeft', (data) => {
+    currentPlayers = data.players || [];
     updatePlayers(data.players);
 });
 
@@ -181,8 +256,8 @@ socket.on('message', (data) => {
 
 socket.on('kicked', (data) => {
     alert(data.message);
-    localStorage.removeItem('gameKey');
-    localStorage.removeItem('playerId');
+    sessionStorage.removeItem('gameKey');
+    sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.querySelector('.container').style.display = 'block';
@@ -204,8 +279,8 @@ messageInput.addEventListener('keypress', (e) => {
 
 document.getElementById('leaveGame').addEventListener('click', () => {
     socket.emit('leaveGame', { playerId });
-    localStorage.removeItem('gameKey');
-    localStorage.removeItem('playerId');
+    sessionStorage.removeItem('gameKey');
+    sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.querySelector('.container').style.display = 'block';
@@ -225,19 +300,31 @@ function sendMessage() {
 }
 
 function updatePlayers(players, readyPlayers = [], currentPlayerId = null, isStarted = false) {
+    if (!players || !Array.isArray(players)) return;
+    currentPlayers = players;
     playerList.innerHTML = '';
     const isCreator = players.length > 0 && players[0].id === playerId;
     players.forEach(player => {
         const li = document.createElement('li');
-        li.textContent = player.nickname;
-        if (readyPlayers.includes(player.id)) {
-            li.textContent += ' (Ready)';
-            li.className = 'ready-player';
+        let text = player.nickname;
+        const tokens = gameTokens[player.id] || 0;
+        text += ` [${tokens}]`;
+        if (eliminatedPlayers.has(player.id)) {
+            text += ' (Out)';
+            li.style.opacity = '0.6';
         }
-        if (isStarted && player.id === currentPlayerId) {
-            li.className += ' current-player';
+        if (protectedPlayers.has(player.id)) {
+            text += ' 🛡️';
         }
-        if (isCreator && player.id !== playerId) {
+        if (player.id === currentPlayerId) {
+            text += ' ←';
+            li.style.fontWeight = 'bold';
+        }
+        if (Array.isArray(readyPlayers) && readyPlayers.includes(player.id)) {
+            text += ' (Ready)';
+        }
+        li.textContent = text;
+        if (isCreator && player.id !== playerId && !eliminatedPlayers.has(player.id)) {
             const kickBtn = document.createElement('button');
             kickBtn.textContent = 'x';
             kickBtn.className = 'kick-btn';
@@ -261,3 +348,195 @@ function showError(message) {
     errorDiv.textContent = message;
     setTimeout(() => errorDiv.textContent = '', 5000);
 }
+
+function renderHand() {
+    if (!handContainer) return;
+    handContainer.innerHTML = '';
+    const isMyTurn = currentTurnPlayerId === playerId;
+    currentHand.forEach((card, idx) => {
+        const btn = document.createElement('button');
+        btn.textContent = `${card.name} (${card.value})`;
+        btn.style.marginRight = '6px';
+        btn.disabled = !isMyTurn;
+        btn.addEventListener('click', () => {
+            if (!isMyTurn) return;
+            handlePlayCard(idx, card.name);
+        });
+        handContainer.appendChild(btn);
+    });
+    // Also keep legacy span in sync
+    if (handSpan) {
+        handSpan.textContent = currentHand.map(c => `${c.name} (${c.value})`).join(', ');
+    }
+}
+
+function handlePlayCard(cardIndex, cardName) {
+    pendingPlay = { cardIndex, cardName };
+
+    // Clear previous selectors
+    targetButtons.innerHTML = '';
+    guessButtons.innerHTML = '';
+    targetSelector.style.display = 'none';
+    guessSelector.style.display = 'none';
+
+    const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(cardName);
+    const needsGuess = cardName === 'Guard';
+
+    if (needsTarget) {
+        // Build target buttons from currentPlayers (exclude self for most, allow for Prince)
+        const allowSelf = cardName === 'Prince';
+        currentPlayers.forEach(p => {
+            if (p.id === playerId && !allowSelf) return;
+            if (eliminatedPlayers.has(p.id)) return;
+            if (protectedPlayers.has(p.id) && cardName !== 'Prince') return;
+
+            const tBtn = document.createElement('button');
+            tBtn.textContent = p.nickname;
+            tBtn.style.margin = '2px';
+            tBtn.addEventListener('click', () => {
+                pendingPlay.targetPlayerId = p.id;
+                if (needsGuess) {
+                    showGuessSelector();
+                } else {
+                    sendPlayCard();
+                }
+            });
+            targetButtons.appendChild(tBtn);
+        });
+
+        if (targetButtons.children.length === 0) {
+            // No valid targets (everyone else protected/eliminated)
+            if (cardName === 'Prince') {
+                // Prince can always target self
+                pendingPlay.targetPlayerId = playerId;
+                sendPlayCard();
+            } else {
+                // Guard / Priest / Baron / King with no legal targets: play anyway (effect fizzles)
+                // Do not trap the player in an empty selector
+                targetSelector.style.display = 'none';
+                sendPlayCard();
+            }
+        } else {
+            targetSelector.style.display = 'block';
+        }
+    } else if (needsGuess) {
+        showGuessSelector();
+    } else {
+        // No target/guess needed (Handmaid, Countess, Princess)
+        sendPlayCard();
+    }
+}
+
+function showGuessSelector() {
+    guessButtons.innerHTML = '';
+    const guesses = ['Priest', 'Baron', 'Handmaid', 'Prince', 'King', 'Countess', 'Princess'];
+    guesses.forEach(g => {
+        const gBtn = document.createElement('button');
+        gBtn.textContent = g;
+        gBtn.style.margin = '2px';
+        gBtn.addEventListener('click', () => {
+            pendingPlay.guess = g;
+            sendPlayCard();
+        });
+        guessButtons.appendChild(gBtn);
+    });
+    guessSelector.style.display = 'block';
+}
+
+function sendPlayCard() {
+    if (!pendingPlay) return;
+    socket.emit('playCard', {
+        playerId,
+        cardIndex: pendingPlay.cardIndex,
+        targetPlayerId: pendingPlay.targetPlayerId || null,
+        guess: pendingPlay.guess || null
+    });
+    // Optimistic clear
+    targetSelector.style.display = 'none';
+    guessSelector.style.display = 'none';
+    actionArea.style.display = 'none';
+}
+
+// Create game
+createButton.addEventListener('click', () => {
+    const nickname = nicknameInput.value.trim();
+    if (!nickname) {
+        showError('Nickname is required');
+        return;
+    }
+    socket.emit('createGame', { nickname, playerId });
+});
+
+// Join game
+joinButton.addEventListener('click', () => {
+    const nickname = nicknameInput.value.trim();
+    const joinKey = joinKeyInput.value.trim();
+    if (!nickname || !joinKey) {
+        showError('Nickname and join key are required');
+        return;
+    }
+    socket.emit('joinGame', { joinKey, nickname, playerId });
+});
+
+// Game joined handler
+socket.on('gameJoined', (data) => {
+    document.querySelector('.container').style.display = 'none';
+    document.getElementById('gameSection').style.display = 'block';
+    console.log('Setting joinKey to', data.joinKey);
+    const joinKeyEl = document.getElementById('joinKey');
+    if (joinKeyEl) {
+        joinKeyEl.textContent = 'Join Key: ' + data.joinKey;
+    }
+    updatePlayers(data.players || [], data.readyPlayers || [], data.currentPlayerId, data.isStarted);
+    currentPlayers = data.players || [];
+    if (data.isStarted) {
+        gameModeDiv.style.display = 'block';
+        const current = data.players.find(p => p.id === data.currentPlayerId);
+        if (current) currentTurnSpan.textContent = current.nickname;
+        currentTurnPlayerId = data.currentPlayerId || null;
+        // Reset play UI state on (re)join
+        actionArea.style.display = 'none';
+        targetSelector.style.display = 'none';
+        guessSelector.style.display = 'none';
+        pendingPlay = null;
+        currentHand = [];
+        if (handContainer) handContainer.innerHTML = '';
+
+        // Safety net for hand on join/reconnect to active game
+        setTimeout(() => {
+            if (currentHand.length === 0) {
+                socket.emit('getMyHand', { playerId });
+            }
+        }, 400);
+    } else {
+        gameModeDiv.style.display = 'none';
+    }
+    // Host start button logic - show for first player (creator) immediately
+    const isCreator = data.players.length > 0 && data.players[0].id === playerId;
+    // Show/hide ready controls - creator never gets the toggle button
+    if (data.readyPhase) {
+        readyStatusDiv.style.display = 'block';
+        if (isCreator) {
+            toggleReadyButton.style.display = 'none';
+        } else {
+            toggleReadyButton.style.display = 'block';
+            toggleReadyButton.textContent = 'Ready';
+        }
+    } else {
+        toggleReadyButton.style.display = 'none';
+        readyStatusDiv.style.display = 'none';
+    }
+    console.log('gameJoined creator check:', { isCreator, playerId, creatorId: data.players[0] && data.players[0].id, players: data.players.length });
+    if (isCreator && !data.isStarted && data.players.length >= 2) {
+        startReadyButton.style.display = 'block';
+        startReadyButton.textContent = data.readyPhase ? 'Start Game' : 'Start Ready Phase';
+    } else {
+        startReadyButton.style.display = 'none';
+    }
+    // Final safety: force show start button for creator
+    if (data.players.length > 0 && data.players[0].id === playerId && !data.isStarted) {
+        startReadyButton.style.display = 'block';
+        startReadyButton.textContent = data.readyPhase && data.readyPlayers.length === data.players.length ? 'Start Game' : 'Start Ready Phase';
+    }
+    joined = true;
+});
