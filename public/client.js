@@ -6,6 +6,11 @@ console.log('Socket created, connected:', socket.connected);
 const playerId = sessionStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
 sessionStorage.setItem('playerId', playerId);
 
+// Surface server 'error' emits (e.g. join rejected mid-round) in the UI
+socket.on('error', (message) => {
+    showError(typeof message === 'string' ? message : 'An error occurred');
+});
+
 // Lobby page logic
 const nicknameInput = document.getElementById('nickname');
 const createButton = document.getElementById('createGame');
@@ -40,22 +45,28 @@ let eliminatedPlayers = new Set();
 let protectedPlayers = new Set();
 let currentTurnPlayerId = null;
 let currentPlayers = [];
+let currentReadyPhase = false;
+let gameIsStarted = false;
 
 socket.on('playerJoined', (data) => {
     currentPlayers = data.players || [];
     updatePlayers(data.players);
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
 });
 
 socket.on('readyPhaseStarted', () => {
+    currentReadyPhase = true;
     readyStatusDiv.style.display = 'block';
     readyStatusDiv.textContent = 'Waiting for all players to ready up...';
-    const isCreator = currentPlayers.length > 0 && currentPlayers[0].id === playerId;
+    startReadyButton.style.display = 'none';
+    const isCreator = currentPlayers.length > 0 && currentPlayers[0] && currentPlayers[0].id === playerId;
     if (isCreator) {
         toggleReadyButton.style.display = 'none';
     } else {
         toggleReadyButton.style.display = 'block';
         toggleReadyButton.textContent = 'Ready';
     }
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
 });
 
 socket.on('readyUpdate', (data) => {
@@ -68,18 +79,7 @@ socket.on('readyUpdate', (data) => {
         const isMeReady = Array.isArray(data.readyPlayers) && data.readyPlayers.includes(playerId);
         toggleReadyButton.textContent = isMeReady ? 'Unready' : 'Ready';
     }
-});
-
-socket.on('gameStarted', (data) => {
-    gameModeDiv.style.display = 'block';
-    startReadyButton.style.display = 'none';
-    toggleReadyButton.style.display = 'none';
-    readyStatusDiv.style.display = 'none';
-    actionArea.style.display = 'none';
-    console.log('gameStarted received', data);
-    if (data.currentPlayerId) {
-        currentTurnSpan.textContent = 'Player ' + data.currentPlayerId;
-    }
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
 });
 
 socket.on('privateHand', (data) => {
@@ -109,6 +109,9 @@ socket.on('roundStarted', (data) => {
     toggleReadyButton.style.display = 'none';
     readyStatusDiv.style.display = 'none';
 
+    currentReadyPhase = false;
+    gameIsStarted = true;
+
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
     currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
 
@@ -116,14 +119,7 @@ socket.on('roundStarted', (data) => {
         updatePlayers(currentPlayers, [], currentTurnPlayerId);
     }
     renderHand();
-
-    // Safety net: if we didn't receive our initial hand for some reason (race, reconnect, etc.),
-    // request it after a short delay. This especially helps the game creator after auto-start.
-    setTimeout(() => {
-        if (currentHand.length === 0) {
-            socket.emit('getMyHand', { playerId });
-        }
-    }, 350);
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
 });
 
 socket.on('turnChanged', (data) => {
@@ -215,6 +211,9 @@ socket.on('gameOver', (data) => {
     document.getElementById('joinKey').textContent = 'Join Key: ';
     gameModeDiv.style.display = 'none';
     actionArea.style.display = 'none';
+    currentReadyPhase = false;
+    gameIsStarted = false;
+    currentPlayers = [];
 });
 
 socket.on('gameEnded', (data) => {
@@ -230,14 +229,13 @@ socket.on('gameEnded', (data) => {
     playerList.innerHTML = '';
     document.getElementById('joinKey').textContent = 'Join Key: ';
     gameModeDiv.style.display = 'none';
+    currentReadyPhase = false;
+    gameIsStarted = false;
+    currentPlayers = [];
 });
 
 startReadyButton.addEventListener('click', () => {
-    if (startReadyButton.textContent === 'Start Game') {
-        socket.emit('startGame', { playerId });
-    } else {
-        socket.emit('startReady', { playerId });
-    }
+    socket.emit('startReady', { playerId });
 });
 
 toggleReadyButton.addEventListener('click', () => {
@@ -248,6 +246,7 @@ toggleReadyButton.addEventListener('click', () => {
 socket.on('playerLeft', (data) => {
     currentPlayers = data.players || [];
     updatePlayers(data.players);
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
 });
 
 socket.on('message', (data) => {
@@ -266,6 +265,9 @@ socket.on('kicked', (data) => {
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
     document.getElementById('joinKey').textContent = 'Join Key: ';
+    currentReadyPhase = false;
+    gameIsStarted = false;
+    currentPlayers = [];
 });
 
 
@@ -289,6 +291,9 @@ document.getElementById('leaveGame').addEventListener('click', () => {
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
     document.getElementById('joinKey').textContent = 'Join Key: ';
+    currentReadyPhase = false;
+    gameIsStarted = false;
+    currentPlayers = [];
 });
 
 function sendMessage() {
@@ -296,6 +301,16 @@ function sendMessage() {
     if (message) {
         socket.emit('sendMessage', { message, playerId });
         messageInput.value = '';
+    }
+}
+
+function updateStartReadyButton(players, readyPhase, isStarted) {
+    const isCreator = players && players.length > 0 && players[0] && players[0].id === playerId;
+    if (isCreator && !isStarted && !readyPhase && players.length >= 2) {
+        startReadyButton.style.display = 'block';
+        startReadyButton.textContent = 'Start Ready Phase';
+    } else {
+        startReadyButton.style.display = 'none';
     }
 }
 
@@ -335,6 +350,8 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null, isSta
         }
         playerList.appendChild(li);
     });
+    // Keep the pre-game start button in sync whenever the player list is refreshed
+    updateStartReadyButton(players, currentReadyPhase, gameIsStarted);
 }
 
 function addMessage(message) {
@@ -489,6 +506,8 @@ socket.on('gameJoined', (data) => {
     }
     updatePlayers(data.players || [], data.readyPlayers || [], data.currentPlayerId, data.isStarted);
     currentPlayers = data.players || [];
+    currentReadyPhase = !!data.readyPhase;
+    gameIsStarted = !!data.isStarted;
     if (data.isStarted) {
         gameModeDiv.style.display = 'block';
         const current = data.players.find(p => p.id === data.currentPlayerId);
@@ -511,9 +530,8 @@ socket.on('gameJoined', (data) => {
     } else {
         gameModeDiv.style.display = 'none';
     }
-    // Host start button logic - show for first player (creator) immediately
-    const isCreator = data.players.length > 0 && data.players[0].id === playerId;
     // Show/hide ready controls - creator never gets the toggle button
+    const isCreator = data.players.length > 0 && data.players[0] && data.players[0].id === playerId;
     if (data.readyPhase) {
         readyStatusDiv.style.display = 'block';
         if (isCreator) {
@@ -522,21 +540,12 @@ socket.on('gameJoined', (data) => {
             toggleReadyButton.style.display = 'block';
             toggleReadyButton.textContent = 'Ready';
         }
+        startReadyButton.style.display = 'none';
     } else {
         toggleReadyButton.style.display = 'none';
         readyStatusDiv.style.display = 'none';
     }
-    console.log('gameJoined creator check:', { isCreator, playerId, creatorId: data.players[0] && data.players[0].id, players: data.players.length });
-    if (isCreator && !data.isStarted && data.players.length >= 2) {
-        startReadyButton.style.display = 'block';
-        startReadyButton.textContent = data.readyPhase ? 'Start Game' : 'Start Ready Phase';
-    } else {
-        startReadyButton.style.display = 'none';
-    }
-    // Final safety: force show start button for creator
-    if (data.players.length > 0 && data.players[0].id === playerId && !data.isStarted) {
-        startReadyButton.style.display = 'block';
-        startReadyButton.textContent = data.readyPhase && data.readyPlayers.length === data.players.length ? 'Start Game' : 'Start Ready Phase';
-    }
+    // Re-evaluate creator's "Start Ready Phase" button using shared logic (now that we have >=2 players after joins)
+    updateStartReadyButton(currentPlayers, currentReadyPhase, gameIsStarted);
     joined = true;
 });

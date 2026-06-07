@@ -50,6 +50,7 @@ socket.on('createGame', (data) => {
 
     socket.playerId = playerId;
     socket.join(joinKey);
+    socket.join(playerId); // for private messages (hands, priest reveals) - symmetric with joinGame/reconnect
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
         socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
         console.log(`Game created: ${joinKey} by ${nickname}`);
@@ -100,6 +101,15 @@ socket.on('joinGame', (data) => {
         return;
     }
 
+    // Per policy: disallow brand-new players from joining once a round has started.
+    // Reconnects for existing playerIds are allowed (handled in the block above).
+    // Joins are permitted again during the inter-round pause (roundOver) so the
+    // newcomer is included when startNewRound deals the next hands.
+    if (game.isStarted && !game.roundOver) {
+        socket.emit('error', 'Cannot join: a round is already in progress');
+        return;
+    }
+
     if (game.players.length >= 6) {
         socket.emit('error', 'Game is full');
         return;
@@ -120,18 +130,6 @@ socket.on('joinGame', (data) => {
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
         socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
         socket.to(joinKey).emit('playerJoined', { players: game.players });
-
-        // If joining an active game/round, give them a hand so they don't miss out
-        if (game.isStarted && !game.roundOver && game.deck && game.deck.length > 0 && !game.hands.has(playerId)) {
-            const card = game.deck.shift();
-            game.hands.set(playerId, [card]);
-            socket.emit('privateHand', {
-                hand: [{ name: card.name, value: card.value }]
-            });
-            io.to(joinKey).emit('playerJoinedActive', {
-                player: { id: playerId, nickname: player.nickname }
-            });
-        }
 
         console.log(`${nickname} joined game: ${joinKey}`);
 });
@@ -489,6 +487,17 @@ function startNewRound(game, key, isFirstRound = false) {
 
     game.lastActivity = Date.now();
 
+    // Draw for the starting player synchronously *before* any round broadcasts.
+    // This ensures the privateHand we emit for them (in the loop below) is already the
+    // correct 2-card hand per Love Letter rules. We emit playerDrew + turnChanged after
+    // roundStarted for clean event ordering (enables play UI after round announce).
+    if (game.deck.length > 0 && game.hands.has(game.currentPlayerId) && !game.eliminated.has(game.currentPlayerId)) {
+        const drawn = game.deck.shift();
+        const hand = game.hands.get(game.currentPlayerId);
+        hand.push(drawn);
+        game.protected.delete(game.currentPlayerId);
+    }
+
     // Broadcast round start
     io.to(key).emit('roundStarted', {
         roundNumber: game.roundNumber,
@@ -497,18 +506,16 @@ function startNewRound(game, key, isFirstRound = false) {
         tokens: Object.fromEntries(game.tokens)
     });
 
-    // Private initial hands
+    // Private hands (post-draw for the starting player, 1 card for others)
     game.players.forEach(player => {
         const h = game.hands.get(player.id) || [];
         io.to(player.id).emit('privateHand', { hand: h.map(c => ({ name: c.name, value: c.value })) });
     });
 
-    // Make the first player draw to start their turn (standard flow)
-    setTimeout(() => {
-        if (!game.roundOver && game.isStarted) {
-            drawForPlayer(game, key, game.currentPlayerId);
-        }
-    }, 50);
+    // Announce the draw and whose turn it is (client uses this to enable actionArea)
+    const p = game.players.find(pp => pp.id === game.currentPlayerId);
+    io.to(key).emit('playerDrew', { playerId: game.currentPlayerId, nickname: p ? p.nickname : '' });
+    io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
 
     console.log(`Round ${game.roundNumber} started for ${key}, first player: ${game.currentPlayerId}`);
 }
@@ -835,8 +842,7 @@ function endRound(game, key) {
     // Start next round automatically after a short pause
     game.roundNumber += 1;
     setTimeout(() => {
-        if (games.has(key) && game.isStarted && !game.roundOver) {
-            // roundOver will be reset inside startNewRound
+        if (games.has(key) && game.isStarted) {
             startNewRound(game, key, false);
         }
     }, 4000);
@@ -871,8 +877,8 @@ socket.on('disconnect', () => {
                 } else {
                     // If it was their turn, advance
                     if (game.currentPlayerId === socket.playerId) {
-                        // Pick next non-eliminated
-                        const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
+                        // Pick next non-eliminated (simple recovery; order is original list order)
+                        const active = game.players.filter(p => !game.eliminated.has(p.id));
                         if (active.length > 0) {
                             game.currentPlayerId = active[0].id;
                             io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });

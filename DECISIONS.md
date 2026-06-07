@@ -13,7 +13,8 @@
 
 ## Game Mechanics
 - Player Limit: Up to 6 players per game.
-- Ready System: Creator starts phase (if 2+ players, not started). Ready button hidden until phase starts. Players can toggle Ready/Unready. Game starts automatically when all ready. Phase ends on start, creator leave, <2 players, or all leave.
+- Ready System: Creator starts phase (if 2+ players, not started). Ready button hidden until phase starts. Players can toggle Ready/Unready. Game starts automatically when all ready (no separate "Start Game" force button). Phase ends on start, creator leave, <2 players, or all leave.
+- Join policy: New players may not join while a round is in progress (isStarted && !roundOver). Reconnects and joins during inter-round pause (after roundOver) are allowed.
 - Game Start: Initialize deck from Python code, burn 1 card, deal 1 to each player, randomly pick starting player (highlighted in list).
 - Persistence: Game state (phase, ready, started, hands, turn) persists on reload/reconnect if active (no expiry for now).
 - Creator Leave: Ends game before start; continues after start if 2+ players remain.
