@@ -20,6 +20,12 @@
 - Creator Leave: Ends game before start; continues after start if 2+ players remain.
 - Kick/Ban: Creator kicks via 'x' button. Kicked twice = permanent ban for that game.
 - State Updates: Broadcast on every change (join/leave, ready/unready, start/end, etc.). New/reconnecting players get full state.
+- Card Effect Timing & Temporary State:
+  - Handmaid protection lasts until the start of the protected player's next turn. Server drops it in `drawForPlayer` (at turn start) and emits `playerProtectionEnded` so all clients remove the shield icon and allow targeting again. Client also cleans up on elimination and between rounds.
+  - Countess rule: A player holding the Countess together with a King or Prince must play the Countess. Client disables the royal cards with a tooltip and shows an alert on click; server also enforces on `playCard`.
+  - Targeting cards (Guard, Priest, Baron, King, and Prince) with no valid unprotected targets: the play is allowed (to avoid trapping the player), but the effect fizzles. An explicit public chat message is emitted (e.g. "X's Priest had no effect (no unprotected targets).").
+  - Temporary turn/action UI state (target/guess selectors and `pendingPlay` from Guard and similar cards) is cleared at the beginning of every turn change so each new turn starts with a clean action state.
+- Prince respects Handmaid protection the same as other targeted cards (client no longer offers protected targets; server validates).
 
 ## Other
 - Min Players for Ready/Start: 2.
