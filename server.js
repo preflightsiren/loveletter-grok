@@ -331,7 +331,7 @@ socket.on('playCard', (data) => {
         }
 
         // Validate target for cards that require one
-        const needsTarget = ['Guard', 'Priest', 'Baron', 'King'].includes(cardToPlay.name);
+        const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(cardToPlay.name);
         const allowsSelf = cardToPlay.name === 'Prince';
 
         if (needsTarget && targetPlayerId) {
@@ -524,7 +524,7 @@ function drawForPlayer(game, key, playerId) {
     if (game.roundOver || game.eliminated.has(playerId) || !game.hands.has(playerId)) return;
 
     if (game.deck.length === 0) {
-        endRound(game, key);
+        endRound(game, key, true);
         return;
     }
 
@@ -532,8 +532,17 @@ function drawForPlayer(game, key, playerId) {
     const hand = game.hands.get(playerId);
     hand.push(drawn);
 
-    // Protection drops at the start of your turn
-    game.protected.delete(playerId);
+    // Protection drops at the start of your turn (Handmaid lasts until the protected
+    // player's next turn begins). Broadcast the end so clients can update UI and
+    // allow targeting again.
+    const p = game.players.find(pp => pp.id === playerId);
+    if (game.protected.has(playerId)) {
+        game.protected.delete(playerId);
+        io.to(key).emit('playerProtectionEnded', {
+            playerId,
+            nickname: p ? p.nickname : ''
+        });
+    }
 
     // Send updated private hand to the player
     io.to(playerId).emit('privateHand', {
@@ -541,7 +550,6 @@ function drawForPlayer(game, key, playerId) {
     });
 
     // Notify everyone that the player drew (card hidden)
-    const p = game.players.find(pp => pp.id === playerId);
     io.to(key).emit('playerDrew', { playerId, nickname: p ? p.nickname : '' });
 
     // If after draw they have Countess + King/Prince, they are forced to play Countess (client can enforce too)
@@ -561,7 +569,7 @@ function advanceToNextPlayer(game, key) {
 
     // If no cards left in deck at the start of someone's turn, round ends
     if (game.deck.length === 0) {
-        endRound(game, key);
+        endRound(game, key, true);
         return;
     }
 
@@ -607,8 +615,14 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
             break;
 
         case 'guard': {
-            if (!targetId || !guess) return;
-            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            if (!targetId || !guess) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Guard had no effect (no unprotected targets).` });
+                return;
+            }
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Guard had no effect (no unprotected targets).` });
+                return;
+            }
             const targetPlayer = game.players.find(p => p.id === targetId);
             const targetHand = game.hands.get(targetId) || [];
             const correct = targetHand.some(c => c.name === guess);
@@ -624,8 +638,14 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
         }
 
         case 'priest': {
-            if (!targetId) return;
-            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            if (!targetId) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Priest had no effect (no unprotected targets).` });
+                return;
+            }
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Priest had no effect (no unprotected targets).` });
+                return;
+            }
             const targetPlayer = game.players.find(p => p.id === targetId);
             const targetHand = (game.hands.get(targetId) || []).map(c => ({ name: c.name, value: c.value }));
             // Only the actor sees the hand
@@ -639,8 +659,14 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
         }
 
         case 'baron': {
-            if (!targetId) return;
-            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            if (!targetId) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Baron had no effect (no unprotected targets).` });
+                return;
+            }
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Baron had no effect (no unprotected targets).` });
+                return;
+            }
             const targetPlayer = game.players.find(p => p.id === targetId);
             const actorHand = game.hands.get(actorId) || [];
             const tHand = game.hands.get(targetId) || [];
@@ -671,7 +697,14 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
 
         case 'prince': {
             const princeTarget = targetId || actorId; // default to self if none provided
-            if (game.eliminated.has(princeTarget)) return;
+            if (game.eliminated.has(princeTarget)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Prince had no effect (no unprotected targets).` });
+                return;
+            }
+            if (game.protected.has(princeTarget)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s Prince had no effect (no unprotected targets).` });
+                return;
+            }
             const tPlayer = game.players.find(p => p.id === princeTarget);
             const tHand = game.hands.get(princeTarget) || [];
             if (tHand.length === 0) break;
@@ -716,8 +749,14 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
         }
 
         case 'king': {
-            if (!targetId || targetId === actorId) return;
-            if (game.protected.has(targetId) || game.eliminated.has(targetId)) return;
+            if (!targetId || targetId === actorId) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s King had no effect (no unprotected targets).` });
+                return;
+            }
+            if (game.protected.has(targetId) || game.eliminated.has(targetId)) {
+                io.to(key).emit('message', { message: `${actor.nickname}'s King had no effect (no unprotected targets).` });
+                return;
+            }
 
             const targetPlayer = game.players.find(p => p.id === targetId);
             const actorHand = game.hands.get(actorId) || [];
@@ -753,7 +792,7 @@ function checkRoundEndAfterElimination(game, key) {
     }
 }
 
-function endRound(game, key) {
+function endRound(game, key, deckEmpty = false) {
     if (game.roundOver) return;
     game.roundOver = true;
 
@@ -816,7 +855,8 @@ function endRound(game, key) {
         winnerNickname: roundWinner ? roundWinner.nickname : null,
         revealed,
         removedCard: game.removedCard ? { name: game.removedCard.name, value: game.removedCard.value } : null,
-        tokens: Object.fromEntries(game.tokens)
+        tokens: Object.fromEntries(game.tokens),
+        deckEmpty: !!deckEmpty
     });
 
     // Check for match win (first to 3 tokens)

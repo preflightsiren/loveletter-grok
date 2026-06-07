@@ -126,13 +126,17 @@ socket.on('turnChanged', (data) => {
     currentTurnPlayerId = data.currentPlayerId || null;
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
     currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
+
+    // Guard (and other targeting cards like Priest/Baron/King) action state
+    // (pending guess/target selectors) must expire at the beginning of the
+    // player's next turn. Clear it on every turn change so the next player
+    // (including the same player on their subsequent turn) starts clean.
+    targetSelector.style.display = 'none';
+    guessSelector.style.display = 'none';
+    pendingPlay = null;
+
     const isMyTurn = currentTurnPlayerId === playerId;
     actionArea.style.display = isMyTurn && currentHand.length > 0 ? 'block' : 'none';
-    if (!isMyTurn) {
-        targetSelector.style.display = 'none';
-        guessSelector.style.display = 'none';
-        pendingPlay = null;
-    }
     updatePlayers(currentPlayers, [], currentTurnPlayerId);
     renderHand();
 });
@@ -155,6 +159,7 @@ socket.on('cardPlayed', (data) => {
 
 socket.on('playerEliminated', (data) => {
     eliminatedPlayers.add(data.playerId);
+    protectedPlayers.delete(data.playerId); // protection no longer relevant
     addMessage(`${data.nickname} is out${data.reason ? ' (' + data.reason + ')' : ''}`);
     updatePlayers(currentPlayers, [], null);
 });
@@ -162,6 +167,12 @@ socket.on('playerEliminated', (data) => {
 socket.on('playerProtected', (data) => {
     protectedPlayers.add(data.playerId);
     addMessage(`${data.nickname} is protected by Handmaid`);
+    updatePlayers(currentPlayers, [], null);
+});
+
+socket.on('playerProtectionEnded', (data) => {
+    protectedPlayers.delete(data.playerId);
+    addMessage(`${data.nickname}'s Handmaid protection has expired`);
     updatePlayers(currentPlayers, [], null);
 });
 
@@ -192,11 +203,15 @@ socket.on('kingSwap', (data) => {
 });
 
 socket.on('roundEnded', (data) => {
-    const winnerText = data.winnerNickname ? `${data.winnerNickname} wins the round!` : 'Round ended in a tie.';
+    let winnerText = data.winnerNickname ? `${data.winnerNickname} wins the round!` : 'Round ended in a tie.';
+    if (data.deckEmpty) {
+        winnerText = `No cards left in the deck. ${winnerText}`;
+    }
     addMessage(`Round ${data.roundNumber} over. ${winnerText}`);
     // Show quick summary of revealed hands (optional)
     console.log('Revealed hands:', data.revealed);
     gameTokens = data.tokens || {};
+    protectedPlayers = new Set(); // ensure any lingering Handmaid protection is cleared between rounds
     updatePlayers(currentPlayers, [], null);
 });
 
@@ -374,9 +389,22 @@ function renderHand() {
         const btn = document.createElement('button');
         btn.textContent = `${card.name} (${card.value})`;
         btn.style.marginRight = '6px';
-        btn.disabled = !isMyTurn;
+
+        const hasCountess = currentHand.some(c => c.name === 'Countess');
+        const hasRoyal = currentHand.some(c => c.name === 'King' || c.name === 'Prince');
+        const mustPlayCountess = hasCountess && hasRoyal && card.name !== 'Countess';
+
+        btn.disabled = !isMyTurn || mustPlayCountess;
+        if (mustPlayCountess) {
+            btn.title = 'You must play the Countess when holding it with King or Prince';
+        }
+
         btn.addEventListener('click', () => {
             if (!isMyTurn) return;
+            if (mustPlayCountess) {
+                alert('You must play the Countess when holding it with King or Prince!');
+                return;
+            }
             handlePlayCard(idx, card.name);
         });
         handContainer.appendChild(btn);
@@ -405,7 +433,7 @@ function handlePlayCard(cardIndex, cardName) {
         currentPlayers.forEach(p => {
             if (p.id === playerId && !allowSelf) return;
             if (eliminatedPlayers.has(p.id)) return;
-            if (protectedPlayers.has(p.id) && cardName !== 'Prince') return;
+            if (protectedPlayers.has(p.id)) return; // cannot target protected players (Handmaid), even with Prince
 
             const tBtn = document.createElement('button');
             tBtn.textContent = p.nickname;
@@ -428,7 +456,7 @@ function handlePlayCard(cardIndex, cardName) {
                 pendingPlay.targetPlayerId = playerId;
                 sendPlayCard();
             } else {
-                // Guard / Priest / Baron / King with no legal targets: play anyway (effect fizzles)
+                // Guard / Priest / Baron / King with no legal targets (all protected/eliminated): play anyway (effect will fizzle with message)
                 // Do not trap the player in an empty selector
                 targetSelector.style.display = 'none';
                 sendPlayCard();
