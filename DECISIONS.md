@@ -31,3 +31,29 @@
 - Min Players for Ready/Start: 2.
 - Ready Toggle: Allowed until game starts.
 - Game End: On creator leave before start; on <2 players after start (to be implemented if needed).
+
+## UI Theme Overhaul (Medieval European Style)
+- **Goal**: Replace the original generic modern/minimal UI (white containers, bright green/blue buttons, Arial, plain text hand) with a cohesive medieval European aesthetic fitting the "Love Letter" theme of courtly intrigue.
+- **Design constraints**: Stay true to the project's "plain HTML/CSS/JS, no frameworks" philosophy. No external fonts, icon libraries, or image assets. Pure CSS + Unicode symbols.
+- **Color & typography palette**:
+  - Dark aged wood background (#2c2115) with subtle grid texture.
+  - Parchment panels (#f4e9d1 / #e8d9b5) with double borders (dark ink + inner gold).
+  - Accent colors: gold (#b38b4d, #d4af37), burgundy (#5c2a1e), deep ink browns.
+  - Serif typography (Georgia / Times family) with letter-spacing for titles.
+- **Card design**: Hand cards are now visual card elements (`.card`) rather than plain `<button>` text:
+  - Top-left value, large central Unicode icon per card type (🛡️ ⚔️ 📜 👑 etc.), prominent name, subtle footer.
+  - State styling: current-turn gold highlight, disabled (Countess rule + non-turn), hover lift.
+  - Tooltips carry the original rule text.
+- **Structural changes**:
+  - Lobby container given explicit `#lobby` id.
+  - In-game area wrapped in `.game-panel`.
+  - All `.container` show/hide logic in client.js updated to target `#lobby` (prevents accidental styling bleed or selector fragility).
+  - Added `.title-banner` with heraldic title treatment.
+  - Themed section labels ("Court Whispers", "Letters in Your Possession", "Players at the Table", etc.).
+- **Other visual/UX touches**:
+  - Player list uses thematic status icons (✝︎ eliminated, 🛡︎ Handmaid protection, → current turn) and ✉︎ token marker.
+  - Buttons use raised parchment/velvet styling with strong borders and active press feedback.
+  - Chat and action areas use inset parchment styling.
+- **Screenshots**: Runtime screenshots (before/after captures) are kept untracked / out of the repo to avoid binary bloat.
+- **Rationale for icons**: Unicode emoji chosen as a lightweight, immediately recognizable stand-in for full card art. Maintains readability across platforms while evoking the right flavor (shields, swords, crowns, scrolls).
+- **Future possibilities noted** (not implemented): Real card illustrations (SVG or external assets), hand fanning via CSS rotation, entrance animations, a dedicated game table background layer. Kept out of scope to preserve zero-dependency nature.

@@ -3,259 +3,586 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Love Letter - Lobby</title>
+    <title>Love Letter — Court of Intrigue</title>
     <style>
+        :root {
+            --parchment: #f4e9d1;
+            --parchment-dark: #e8d9b5;
+            --wood: #2c2115;
+            --gold: #b38b4d;
+            --gold-light: #d4af37;
+            --burgundy: #5c2a1e;
+            --deep-red: #7a2f1e;
+            --ink: #2c2115;
+            --ink-light: #3f2a1f;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
+            font-family: Georgia, 'Times New Roman', Times, serif;
+            background-color: #2c2115;
+            background-image: 
+                linear-gradient(rgba(60,45,30,0.22) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(60,45,30,0.22) 1px, transparent 1px);
+            background-size: 22px 22px;
+            color: var(--ink);
             margin: 0;
-        }
-        .container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            width: 300px;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-        }
-        input {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        button {
-            width: 100%;
-            padding: 10px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .error {
-            color: red;
-            font-size: 14px;
-            margin-top: 10px;
-        }
-        .join-key {
-            background-color: white;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .players {
-            background-color: white;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .players h2 {
-            margin-top: 0;
-        }
-        .players ul {
-            list-style-type: none;
-            padding: 0;
-        }
-        .players li {
-            padding: 5px 0;
-        }
-        .chat {
-            background-color: white;
-            padding: 10px;
-            border-radius: 8px;
-            height: 300px;
+            padding: 24px 16px;
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
+            align-items: center;
         }
-        .chat h2 {
+
+        .title-banner {
+            text-align: center;
+            margin-bottom: 12px;
+        }
+
+        .title-banner h1 {
+            font-family: Georgia, serif;
+            font-size: 2.1rem;
+            letter-spacing: 3px;
+            color: var(--gold-light);
+            text-shadow: 1px 1px 0 #3f2a1f, 2px 2px 0 #2c2115;
+            margin: 0;
+        }
+
+        .title-banner .subtitle {
+            font-size: 0.85rem;
+            color: #c5a26f;
+            letter-spacing: 2px;
+            margin-top: 2px;
+        }
+
+        .container, .game-panel {
+            background: var(--parchment);
+            border: 4px solid var(--ink-light);
+            border-radius: 4px;
+            box-shadow: 0 6px 0 #1f170f, 0 10px 25px rgba(0,0,0,0.5);
+            padding: 22px 24px;
+            width: 100%;
+            max-width: 720px;
+            position: relative;
+        }
+
+        #gameSection {
+            width: 100%;
+            max-width: 720px;
+            margin-top: 4px;
+        }
+
+        .container::before, .game-panel::before {
+            content: '';
+            position: absolute;
+            top: 6px; left: 6px; right: 6px; bottom: 6px;
+            border: 1px solid var(--gold);
+            border-radius: 2px;
+            pointer-events: none;
+        }
+
+        h1 {
+            text-align: center;
+            color: var(--burgundy);
+            font-size: 1.65rem;
+            margin: 4px 0 14px;
+            letter-spacing: 1.5px;
+            border-bottom: 1px solid var(--gold);
+            padding-bottom: 8px;
+        }
+
+        .game-panel h1 {
             margin-top: 0;
         }
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            border: 1px solid #ccc;
-            padding: 10px;
-            margin-bottom: 10px;
-        }
-        .chat-input {
-            display: flex;
-        }
-        .chat-input input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px 0 0 4px;
-        }
-        .chat-input button {
-            padding: 5px 10px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 0 4px 4px 0;
-            cursor: pointer;
-            width: 60px;
-        }
-        .chat-input button:hover {
-            background-color: #45a049;
-        }
-        #leaveGame {
-            margin-top: 10px;
-            padding: 8px 16px;
-            background-color: #f44336;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        #leaveGame:hover {
-            background-color: #d32f2f;
-        }
-        .kick-btn {
-            margin-left: 5px;
-            padding: 1px 3px;
-            background-color: #ccc;
-            color: #666;
-            border: none;
+
+        input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            margin: 8px 0;
+            border: 2px solid var(--ink-light);
+            background: #fffef5;
+            color: var(--ink);
+            font-family: Georgia, serif;
+            font-size: 1rem;
             border-radius: 2px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: var(--gold);
+            box-shadow: 0 0 0 3px rgba(179, 139, 77, 0.2);
+        }
+
+        button {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--parchment-dark);
+            color: var(--ink);
+            border: 3px solid var(--ink-light);
+            font-family: Georgia, serif;
+            font-size: 0.95rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            border-radius: 2px;
+            cursor: pointer;
+            box-shadow: 0 2px 0 #3f2a1f;
+            transition: all 0.1s ease;
+        }
+
+        button:hover {
+            background: #e8d9b5;
+            border-color: var(--gold);
+            color: var(--burgundy);
+        }
+
+        button:active {
+            transform: translateY(1px);
+            box-shadow: 0 1px 0 #3f2a1f;
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            background: #d9ccaa;
+        }
+
+        .error {
+            color: #9c2e1f;
+            font-size: 0.9rem;
+            margin-top: 8px;
+            font-weight: bold;
+        }
+
+        /* Lobby specific */
+        #lobby {
+            max-width: 380px;
+        }
+
+        .lobby-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 6px;
+        }
+
+        /* Game layout */
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #e8d9b5;
+            border: 2px solid var(--ink-light);
+            padding: 6px 12px;
+            margin: -6px -6px 14px;
+            border-radius: 2px;
+        }
+
+        .join-key {
+            background: #fffef5;
+            border: 2px solid var(--gold);
+            padding: 8px 14px;
+            text-align: center;
+            font-family: monospace;
+            letter-spacing: 3px;
+            color: var(--burgundy);
+            font-size: 0.95rem;
+            margin-bottom: 16px;
+        }
+
+        .players {
+            background: #fffef5;
+            border: 2px solid var(--ink-light);
+            padding: 12px 14px;
+            margin-bottom: 16px;
+        }
+
+        .players h2 {
+            margin: 0 0 8px;
+            font-size: 1.05rem;
+            color: var(--burgundy);
+            letter-spacing: 1px;
+        }
+
+        .players ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .players li {
+            padding: 5px 0;
+            border-bottom: 1px dotted #c9b38a;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .players li:last-child {
+            border-bottom: none;
+        }
+
+        .current-player {
+            font-weight: bold;
+            color: var(--burgundy);
+        }
+
+        .ready-player {
+            color: #3d5a2e;
+        }
+
+        .kick-btn {
+            margin-left: auto;
+            padding: 0 5px;
+            background: transparent;
+            color: #8b5a3c;
+            border: 1px solid #8b5a3c;
+            border-radius: 1px;
             cursor: pointer;
             font-size: 10px;
             width: 16px;
             height: 16px;
             line-height: 14px;
         }
+
         .kick-btn:hover {
-            background-color: #f44336;
-            color: white;
+            background: var(--deep-red);
+            color: #f4e9d1;
+            border-color: var(--deep-red);
         }
+
+        .chat {
+            background: #fffef5;
+            border: 2px solid var(--ink-light);
+            padding: 10px;
+            height: 220px;
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 12px;
+        }
+
+        .chat h2 {
+            margin: 0 0 6px;
+            font-size: 1rem;
+            color: var(--burgundy);
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #c9b38a;
+            padding: 8px;
+            background: #f9f2e0;
+            font-size: 0.9rem;
+            line-height: 1.35;
+        }
+
+        .chat-messages p {
+            margin: 3px 0;
+        }
+
+        .chat-input {
+            display: flex;
+            margin-top: 6px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 7px 9px;
+            border: 2px solid var(--ink-light);
+            border-radius: 2px 0 0 2px;
+            font-family: Georgia, serif;
+            background: #fffef5;
+        }
+
+        .chat-input button {
+            width: 68px;
+            padding: 7px;
+            border-radius: 0 2px 2px 0;
+        }
+
+        #leaveGame {
+            background: #5c2a1e;
+            color: #f4e9d1;
+            border-color: #3f2a1f;
+            width: auto;
+            padding: 7px 18px;
+            margin-top: 6px;
+            margin-left: auto;
+            display: block;
+        }
+
+        #leaveGame:hover {
+            background: #7a2f1e;
+            color: #f4e9d1;
+        }
+
+        /* Ready controls */
+        #startReady, #toggleReady {
+            width: auto;
+            padding: 8px 18px;
+            margin: 8px 4px 0 0;
+            display: inline-block;
+        }
+
         #startReady {
-            padding: 8px 16px;
-            background-color: #2196F3;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
+            background: #4a3a28;
+            color: #f4e9d1;
+            border-color: #3f2a1f;
         }
+
         #startReady:hover {
-            background-color: #0b7dda;
+            background: var(--gold);
+            color: var(--ink);
         }
+
         #toggleReady {
-            padding: 8px 16px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
+            background: #3d5a2e;
+            color: #f4e9d1;
+            border-color: #2e4522;
         }
+
         #toggleReady:hover {
-            background-color: #45a049;
+            background: #4e6f3b;
         }
+
         #readyStatus {
-            margin-top: 10px;
-            font-size: 14px;
+            margin-top: 8px;
+            font-size: 0.9rem;
+            color: var(--ink-light);
         }
-        .ready-player {
-            color: green;
+
+        /* Game area */
+        #gameMode {
+            margin-top: 8px;
         }
-        .current-player {
-            font-weight: bold;
-            color: blue;
+
+        .section-title {
+            font-size: 1rem;
+            color: var(--burgundy);
+            margin: 12px 0 6px;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #c9b38a;
+            padding-bottom: 2px;
         }
-        #startReady {
-            padding: 8px 16px;
-            background-color: #2196F3;
-            color: white;
-            border: none;
-            border-radius: 4px;
+
+        /* Medieval Card Style */
+        #handContainer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: flex-start;
+            padding: 6px 2px;
+        }
+
+        .card {
+            position: relative;
+            width: 110px;
+            min-height: 148px;
+            background: #f9f2e0;
+            border: 3px solid #3f2a1f;
+            border-radius: 3px;
+            box-shadow: 2px 4px 0 #2c2115, inset 0 0 0 2px #f4e9d1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 5px 6px;
             cursor: pointer;
-            margin-top: 10px;
+            font-family: Georgia, serif;
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            user-select: none;
         }
-        #startReady:hover {
-            background-color: #0b7dda;
+
+        .card::after {
+            content: '✧';
+            position: absolute;
+            bottom: 4px;
+            right: 6px;
+            font-size: 9px;
+            color: #a38c5f;
+            opacity: 0.45;
         }
-        #toggleReady {
-            padding: 8px 16px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
+
+        .card:hover {
+            transform: translateY(-3px);
+            box-shadow: 3px 6px 0 #2c2115, inset 0 0 0 1px #f4e9d1;
         }
-        #toggleReady:hover {
-            background-color: #45a049;
+
+        .card:disabled,
+        .card.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(0.3);
         }
-        #readyStatus {
-            margin-top: 10px;
-            font-size: 14px;
-        }
-        .ready-player {
-            color: green;
-        }
-        .current-player {
+
+        .card .card-value {
+            position: absolute;
+            top: 6px;
+            left: 7px;
+            font-size: 0.95rem;
             font-weight: bold;
-            color: blue;
+            color: var(--burgundy);
+            line-height: 1;
+        }
+
+        .card .card-icon {
+            font-size: 1.65rem;
+            line-height: 1;
+            margin: 4px 0 2px;
+            opacity: 0.9;
+        }
+
+        .card .card-name {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #2c2115;
+            text-align: center;
+            letter-spacing: 0.4px;
+            margin: 4px 0 2px;
+            line-height: 1.05;
+        }
+
+        .card .card-bottom {
+            font-size: 0.58rem;
+            color: #5c4630;
+            text-align: center;
+            border-top: 1px solid #c9b38a;
+            padding-top: 2px;
+            width: 92%;
+            letter-spacing: 1px;
+        }
+
+        .card.current-turn {
+            border-color: var(--gold-light);
+            box-shadow: 0 0 0 3px rgba(211, 175, 55, 0.35), 2px 3px 0 #2c2115;
+        }
+
+        /* Action selectors */
+        #actionArea {
+            background: #fffef5;
+            border: 2px solid var(--ink-light);
+            padding: 11px 13px;
+            margin-top: 12px;
+        }
+
+        #targetSelector, #guessSelector {
+            margin: 6px 0;
+        }
+
+        #targetSelector strong,
+        #guessSelector strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--burgundy);
+            font-size: 0.9rem;
+        }
+
+        #targetButtons button,
+        #guessButtons button {
+            width: auto;
+            padding: 6px 13px;
+            margin: 3px 2px;
+            font-size: 0.88rem;
+            background: #f4e9d1;
+            border: 2px solid #3f2a1f;
+            box-shadow: 1px 1px 0 #2c2115;
+        }
+
+        #targetButtons button:hover,
+        #guessButtons button:hover {
+            background: var(--gold-light);
+            color: #2c2115;
+            border-color: var(--gold);
+        }
+
+        /* Player status indicators */
+        .status-icon {
+            font-size: 0.95rem;
+            margin-left: 4px;
+        }
+
+        /* Current turn banner */
+        #currentTurn {
+            background: #e8d9b5;
+            border: 1px solid var(--gold);
+            padding: 6px 10px;
+            font-weight: bold;
+            color: var(--burgundy);
+            display: inline-block;
+            margin: 4px 0;
+        }
+
+        .medieval-divider {
+            height: 1px;
+            background: linear-gradient(to right, transparent, #b38b4d, transparent);
+            margin: 12px 0;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Love Letter Lobby</h1>
-        <input type="text" id="nickname" placeholder="Enter your nickname" maxlength="20">
-        <button id="createGame">Create New Game</button>
-        <input type="text" id="joinKeyInput" placeholder="Enter join key" maxlength="8">
-        <button id="joinGame">Join Game</button>
+    <div class="title-banner">
+        <h1>LOVE LETTER</h1>
+        <div class="subtitle">A GAME OF WIT, INTRIGUE &amp; COURTSHIP</div>
+    </div>
+
+    <!-- LOBBY -->
+    <div id="lobby" class="container">
+        <h1>Kingdom Assembly</h1>
+        <input type="text" id="nickname" placeholder="Your name at court" maxlength="20">
+        <div class="lobby-actions">
+            <button id="createGame">Create a New Game</button>
+            <input type="text" id="joinKeyInput" placeholder="Enter join key (e.g. 8 characters)" maxlength="8">
+            <button id="joinGame">Join Existing Game</button>
+        </div>
         <div id="error" class="error"></div>
     </div>
 
+    <!-- GAME -->
     <div id="gameSection" style="display:none;">
-        <div class="container">
-            <h1>Love Letter Game</h1>
-        <div class="join-key">
-            <p id="joinKey">Join Key: </p>
-        </div>
-            <div class="players">
-                <h2>Players</h2>
-                <ul id="playerList"></ul>
-                <button id="startReady" style="display:none; margin-top: 8px;">Start Ready Phase</button>
-                <button id="toggleReady" style="display:none; margin-top: 8px;">Ready</button>
-                <div id="readyStatus" style="display:none; margin-top: 8px; font-size: 14px;"></div>
+        <div class="game-panel">
+            <div class="game-header">
+                <div><strong>Love Letter</strong> — Court Intrigue</div>
+                <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e;">Join Key: —</div>
             </div>
+
+            <div class="players">
+                <h2>Players at the Table</h2>
+                <ul id="playerList"></ul>
+                <div style="margin-top:6px;">
+                    <button id="startReady" style="display:none;">Begin Ready Phase</button>
+                    <button id="toggleReady" style="display:none;">Ready</button>
+                    <div id="readyStatus" style="display:none;"></div>
+                </div>
+            </div>
+
             <div class="chat">
-                <h2>Chat</h2>
+                <h2>Court Whispers</h2>
                 <div id="chatMessages" class="chat-messages"></div>
                 <div class="chat-input">
-                    <input type="text" id="messageInput" placeholder="Type a message..." maxlength="200">
+                    <input type="text" id="messageInput" placeholder="Speak discreetly..." maxlength="200">
                     <button id="sendMessage">Send</button>
                 </div>
-                <button id="leaveGame">Leave Game</button>
             </div>
+
+            <button id="leaveGame">Leave the Court</button>
+
             <div id="gameMode" style="display:none;">
-                <h2>Your Hand</h2>
-                <div id="handContainer" style="margin-bottom:8px;"></div>
-                <h2>Current Turn</h2>
-                <p id="currentTurn"></p>
-                <div id="actionArea" style="margin-top:8px; display:none;">
-                    <div id="targetSelector" style="display:none; margin:4px 0;">
-                        <strong>Choose target:</strong>
+                <div class="section-title">Letters in Your Possession</div>
+                <div id="handContainer"></div>
+
+                <div class="section-title">Current Turn at Court</div>
+                <div id="currentTurn" style="margin:4px 0 10px; font-size:1.05rem;"></div>
+
+                <div id="actionArea" style="display:none;">
+                    <div id="targetSelector" style="display:none;">
+                        <strong>Choose your target:</strong>
                         <span id="targetButtons"></span>
                     </div>
-                    <div id="guessSelector" style="display:none; margin:4px 0;">
-                        <strong>Guard - Guess a card:</strong>
+                    <div id="guessSelector" style="display:none;">
+                        <strong>Guard — Accuse a courtier of holding which letter?</strong>
                         <span id="guessButtons"></span>
                     </div>
                 </div>

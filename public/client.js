@@ -27,7 +27,6 @@ const startReadyButton = document.getElementById('startReady');
 const toggleReadyButton = document.getElementById('toggleReady');
 const readyStatusDiv = document.getElementById('readyStatus');
 const gameModeDiv = document.getElementById('gameMode');
-const handSpan = document.getElementById('hand');
 const handContainer = document.getElementById('handContainer');
 const currentTurnSpan = document.getElementById('currentTurn');
 const actionArea = document.getElementById('actionArea');
@@ -113,7 +112,7 @@ socket.on('roundStarted', (data) => {
     gameIsStarted = true;
 
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
-    currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
+    currentTurnSpan.textContent = current ? `${current.nickname}'s turn` : 'Waiting...';
 
     if (currentPlayers.length > 0) {
         updatePlayers(currentPlayers, [], currentTurnPlayerId);
@@ -125,7 +124,7 @@ socket.on('roundStarted', (data) => {
 socket.on('turnChanged', (data) => {
     currentTurnPlayerId = data.currentPlayerId || null;
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
-    currentTurnSpan.textContent = current ? current.nickname : (currentTurnPlayerId || '');
+    currentTurnSpan.textContent = current ? `${current.nickname}'s turn` : 'Waiting...';
 
     // Guard (and other targeting cards like Priest/Baron/King) action state
     // (pending guess/target selectors) must expire at the beginning of the
@@ -219,7 +218,7 @@ socket.on('gameOver', (data) => {
     alert(`Game Over! ${data.winnerNickname} wins with ${data.finalTokens[data.winnerId]} tokens.`);
     // Reset UI to lobby
     document.getElementById('gameSection').style.display = 'none';
-    document.querySelector('.container').style.display = 'block';
+    document.getElementById('lobby').style.display = 'block';
     joined = false;
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
@@ -237,7 +236,7 @@ socket.on('gameEnded', (data) => {
     sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
-    document.querySelector('.container').style.display = 'block';
+    document.getElementById('lobby').style.display = 'block';
     joined = false;
     // Clear UI
     chatMessages.innerHTML = '';
@@ -274,7 +273,7 @@ socket.on('kicked', (data) => {
     sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
-    document.querySelector('.container').style.display = 'block';
+    document.getElementById('lobby').style.display = 'block';
     joined = false;
     // Clear chat and players
     chatMessages.innerHTML = '';
@@ -300,7 +299,7 @@ document.getElementById('leaveGame').addEventListener('click', () => {
     sessionStorage.removeItem('playerId');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
-    document.querySelector('.container').style.display = 'block';
+    document.getElementById('lobby').style.display = 'block';
     joined = false;
     // Clear chat and players
     chatMessages.innerHTML = '';
@@ -329,35 +328,40 @@ function updateStartReadyButton(players, readyPhase, isStarted) {
     }
 }
 
-function updatePlayers(players, readyPlayers = [], currentPlayerId = null, isStarted = false) {
+function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
     if (!players || !Array.isArray(players)) return;
     currentPlayers = players;
     playerList.innerHTML = '';
     const isCreator = players.length > 0 && players[0].id === playerId;
+
     players.forEach(player => {
         const li = document.createElement('li');
-        let text = player.nickname;
+
         const tokens = gameTokens[player.id] || 0;
-        text += ` [${tokens}]`;
+
+        let statusHtml = '';
         if (eliminatedPlayers.has(player.id)) {
-            text += ' (Out)';
-            li.style.opacity = '0.6';
+            statusHtml += ' <span class="status-icon" title="Eliminated">✝︎</span>';
+            li.style.opacity = '0.65';
         }
         if (protectedPlayers.has(player.id)) {
-            text += ' 🛡️';
+            statusHtml += ' <span class="status-icon" title="Protected by Handmaid">🛡︎</span>';
         }
         if (player.id === currentPlayerId) {
-            text += ' ←';
-            li.style.fontWeight = 'bold';
+            statusHtml += ' <span class="status-icon" title="Current turn">→</span>';
+            li.classList.add('current-player');
         }
         if (Array.isArray(readyPlayers) && readyPlayers.includes(player.id)) {
-            text += ' (Ready)';
+            statusHtml += ' <span class="status-icon ready-player">(Ready)</span>';
         }
-        li.textContent = text;
+
+        li.innerHTML = `<span>${player.nickname}</span> <span style="margin-left:auto; font-size:0.85rem; color:#5c4630;">[${tokens} ✉︎]</span>${statusHtml}`;
+
         if (isCreator && player.id !== playerId && !eliminatedPlayers.has(player.id)) {
             const kickBtn = document.createElement('button');
-            kickBtn.textContent = 'x';
+            kickBtn.textContent = '×';
             kickBtn.className = 'kick-btn';
+            kickBtn.title = 'Remove from court';
             kickBtn.addEventListener('click', () => {
                 socket.emit('kickPlayer', { kickedPlayerId: player.id, playerId });
             });
@@ -365,7 +369,7 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null, isSta
         }
         playerList.appendChild(li);
     });
-    // Keep the pre-game start button in sync whenever the player list is refreshed
+
     updateStartReadyButton(players, currentReadyPhase, gameIsStarted);
 }
 
@@ -381,25 +385,64 @@ function showError(message) {
     setTimeout(() => errorDiv.textContent = '', 5000);
 }
 
+const CARD_TOOLTIPS = {
+    'Guard': 'Name a card other than Guard. If the target has it, they are eliminated.',
+    'Priest': 'Privately look at another player\'s hand.',
+    'Baron': 'Compare hands with another player. The one with the lower value is eliminated.',
+    'Handmaid': 'You are immune to other players\' card effects until your next turn.',
+    'Prince': 'Choose a player (including yourself). They discard their hand and draw a new one. Princess causes elimination.',
+    'King': 'Swap hands with another player.',
+    'Countess': 'If you hold the King or Prince, you must play the Countess instead.',
+    'Princess': 'If you play this card (or are forced to discard it), you are eliminated.'
+};
+
+function getCardIcon(name) {
+    const icons = {
+        'Guard': '🛡️',
+        'Priest': '📜',
+        'Baron': '⚔️',
+        'Handmaid': '👑',
+        'Prince': '🤴',
+        'King': '👑',
+        'Countess': '👸',
+        'Princess': '👸'
+    };
+    return icons[name] || '◆';
+}
+
 function renderHand() {
     if (!handContainer) return;
     handContainer.innerHTML = '';
     const isMyTurn = currentTurnPlayerId === playerId;
-    currentHand.forEach((card, idx) => {
-        const btn = document.createElement('button');
-        btn.textContent = `${card.name} (${card.value})`;
-        btn.style.marginRight = '6px';
 
-        const hasCountess = currentHand.some(c => c.name === 'Countess');
-        const hasRoyal = currentHand.some(c => c.name === 'King' || c.name === 'Prince');
+    const hasCountess = currentHand.some(c => c.name === 'Countess');
+    const hasRoyal = currentHand.some(c => c.name === 'King' || c.name === 'Prince');
+
+    currentHand.forEach((card, idx) => {
+        const cardEl = document.createElement('div');
+        cardEl.className = 'card';
+        if (isMyTurn) cardEl.classList.add('current-turn');
+
         const mustPlayCountess = hasCountess && hasRoyal && card.name !== 'Countess';
 
-        btn.disabled = !isMyTurn || mustPlayCountess;
-        if (mustPlayCountess) {
-            btn.title = 'You must play the Countess when holding it with King or Prince';
+        if (!isMyTurn || mustPlayCountess) {
+            cardEl.classList.add('disabled');
         }
 
-        btn.addEventListener('click', () => {
+        const icon = getCardIcon(card.name);
+        const tooltip = mustPlayCountess
+            ? 'You must play the Countess when holding it with King or Prince'
+            : (CARD_TOOLTIPS[card.name] || '');
+
+        cardEl.innerHTML = `
+            <div class="card-value">${card.value}</div>
+            <div class="card-icon">${icon}</div>
+            <div class="card-name">${card.name}</div>
+            <div class="card-bottom">${card.value} — ${card.name.slice(0,3).toUpperCase()}</div>
+        `;
+        cardEl.title = tooltip;
+
+        cardEl.addEventListener('click', () => {
             if (!isMyTurn) return;
             if (mustPlayCountess) {
                 alert('You must play the Countess when holding it with King or Prince!');
@@ -407,12 +450,9 @@ function renderHand() {
             }
             handlePlayCard(idx, card.name);
         });
-        handContainer.appendChild(btn);
+
+        handContainer.appendChild(cardEl);
     });
-    // Also keep legacy span in sync
-    if (handSpan) {
-        handSpan.textContent = currentHand.map(c => `${c.name} (${c.value})`).join(', ');
-    }
 }
 
 function handlePlayCard(cardIndex, cardName) {
@@ -428,40 +468,51 @@ function handlePlayCard(cardIndex, cardName) {
     const needsGuess = cardName === 'Guard';
 
     if (needsTarget) {
-        // Build target buttons from currentPlayers (exclude self for most, allow for Prince)
+        // Collect valid targets (exclude self except for Prince, eliminated, protected)
         const allowSelf = cardName === 'Prince';
-        currentPlayers.forEach(p => {
-            if (p.id === playerId && !allowSelf) return;
-            if (eliminatedPlayers.has(p.id)) return;
-            if (protectedPlayers.has(p.id)) return; // cannot target protected players (Handmaid), even with Prince
-
-            const tBtn = document.createElement('button');
-            tBtn.textContent = p.nickname;
-            tBtn.style.margin = '2px';
-            tBtn.addEventListener('click', () => {
-                pendingPlay.targetPlayerId = p.id;
-                if (needsGuess) {
-                    showGuessSelector();
-                } else {
-                    sendPlayCard();
-                }
-            });
-            targetButtons.appendChild(tBtn);
+        const validTargets = currentPlayers.filter(p => {
+            if (p.id === playerId && !allowSelf) return false;
+            if (eliminatedPlayers.has(p.id)) return false;
+            if (protectedPlayers.has(p.id)) return false; // cannot target protected players (Handmaid)
+            return true;
         });
 
-        if (targetButtons.children.length === 0) {
+        if (validTargets.length === 0) {
             // No valid targets (everyone else protected/eliminated)
             if (cardName === 'Prince') {
                 // Prince can always target self
                 pendingPlay.targetPlayerId = playerId;
                 sendPlayCard();
             } else {
-                // Guard / Priest / Baron / King with no legal targets (all protected/eliminated): play anyway (effect will fizzle with message)
+                // Guard / Priest / Baron / King with no legal targets: play anyway (effect will fizzle with message)
                 // Do not trap the player in an empty selector
                 targetSelector.style.display = 'none';
                 sendPlayCard();
             }
+        } else if (validTargets.length === 1) {
+            // Only one possible target: auto-select it (no extra click needed)
+            pendingPlay.targetPlayerId = validTargets[0].id;
+            if (needsGuess) {
+                showGuessSelector();
+            } else {
+                sendPlayCard();
+            }
         } else {
+            // Multiple targets: show buttons for the user to choose
+            validTargets.forEach(p => {
+                const tBtn = document.createElement('button');
+                tBtn.textContent = p.nickname;
+                tBtn.style.margin = '2px';
+                tBtn.addEventListener('click', () => {
+                    pendingPlay.targetPlayerId = p.id;
+                    if (needsGuess) {
+                        showGuessSelector();
+                    } else {
+                        sendPlayCard();
+                    }
+                });
+                targetButtons.appendChild(tBtn);
+            });
             targetSelector.style.display = 'block';
         }
     } else if (needsGuess) {
@@ -525,21 +576,21 @@ joinButton.addEventListener('click', () => {
 
 // Game joined handler
 socket.on('gameJoined', (data) => {
-    document.querySelector('.container').style.display = 'none';
+    document.getElementById('lobby').style.display = 'none';
     document.getElementById('gameSection').style.display = 'block';
     console.log('Setting joinKey to', data.joinKey);
     const joinKeyEl = document.getElementById('joinKey');
     if (joinKeyEl) {
         joinKeyEl.textContent = 'Join Key: ' + data.joinKey;
     }
-    updatePlayers(data.players || [], data.readyPlayers || [], data.currentPlayerId, data.isStarted);
+    updatePlayers(data.players || [], data.readyPlayers || [], data.currentPlayerId);
     currentPlayers = data.players || [];
     currentReadyPhase = !!data.readyPhase;
     gameIsStarted = !!data.isStarted;
     if (data.isStarted) {
         gameModeDiv.style.display = 'block';
         const current = data.players.find(p => p.id === data.currentPlayerId);
-        if (current) currentTurnSpan.textContent = current.nickname;
+        if (current) currentTurnSpan.textContent = `${current.nickname}'s turn`;
         currentTurnPlayerId = data.currentPlayerId || null;
         // Reset play UI state on (re)join
         actionArea.style.display = 'none';
