@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+server.log
+*.log
+*.png
+.env
+.env.*
+.git
+.gitignore
+Screenshot_*.png
+railway.toml
+nixpacks.toml

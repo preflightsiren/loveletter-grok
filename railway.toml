@@ -1,0 +1,8 @@
+[build]
+builder = "RAILPACK"
+# Explicitly ensure dependencies are installed
+buildCommand = "npm ci"
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"

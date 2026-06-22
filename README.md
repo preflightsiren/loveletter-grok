@@ -52,7 +52,7 @@ This app is ready for Railway (single service serves both the static frontend an
 2. Go to https://railway.com/new
 3. Select "Deploy from GitHub repo"
 4. Connect the repo.
-5. Railway will auto-detect the Node.js app and run `npm install && npm start`.
+5. Railway will auto-detect the Node.js app and run `npm install` (via Railpack + railway.toml).
 6. Add a public domain in the service settings.
 
 ### Important Notes
@@ -62,6 +62,20 @@ This app is ready for Railway (single service serves both the static frontend an
 - The app listens on `process.env.PORT` (required by Railway).
 - Health endpoint at `/health`.
 - Socket.IO works out of the box (polling + websocket).
+
+### Troubleshooting Railway Deploys
+
+If Railway did not run `npm install` (you see module not found errors at runtime or no "Installing dependencies" in logs):
+
+1. In the Railway dashboard:
+   - Go to your service → **Settings** → **Build**
+   - Set **Builder** to **Railpack** (Nixpacks is deprecated)
+   - **Build Command**: `npm ci` (the file also sets this)
+   - **Start Command**: `npm start` (or leave blank — Procfile handles it)
+2. Click **Redeploy** (use the latest commit).
+3. Watch the **Build Logs** (separate from deployment/runtime logs) for the install step.
+
+We include a `railway.toml` to force the Railpack builder and the `npm ci` build command.
 
 ## Tech
 - Backend: Express + Socket.IO
