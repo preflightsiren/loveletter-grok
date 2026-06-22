@@ -10,6 +10,11 @@ const io = socketIo(server);
 // Serve static files from public directory
 app.use(express.static('public'));
 
+// Health check for Railway and monitoring
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
 // Redirect game.html to index
 app.get('/game.html', (req, res) => {
     res.redirect('/');
@@ -17,6 +22,59 @@ app.get('/game.html', (req, res) => {
 
 // In-memory storage for games
 const games = new Map();
+
+// --- Memorable join code generator (human-friendly) ---
+const ADJECTIVES = [
+  'ancient', 'bold', 'crimson', 'daring', 'elegant', 'fierce', 'golden',
+  'hidden', 'noble', 'quiet', 'royal', 'silent', 'swift', 'whispered', 'wise',
+  'brave', 'cunning', 'loyal', 'proud', 'shadowy'
+];
+
+const NOUNS = [
+  'crown', 'rose', 'letter', 'seal', 'dagger', 'falcon', 'throne', 'mask',
+  'parchment', 'knight', 'court', 'flame', 'garden', 'blade', 'whisper',
+  'lion', 'tower', 'banner', 'chalice', 'serpent'
+];
+
+function generateMemorableCode() {
+  // Try a few times to avoid collision with active games
+  for (let i = 0; i < 30; i++) {
+    const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+    const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+    const code = `${adj}-${noun}`;
+    const normalized = normalizeJoinKey(code);
+    if (!games.has(normalized)) {
+      return code; // return pretty form
+    }
+  }
+  // Fallback with a number
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  return `${adj}-${noun}-${Math.floor(Math.random() * 90) + 10}`;
+}
+
+function normalizeJoinKey(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function generateAuthToken() {
+  // 128-bit-ish random, url-safe, short enough
+  return uuidv4().replace(/-/g, '');
+}
+
+function getPrivateRoom(game, playerId) {
+  if (!game || !game.authTokens) return playerId;
+  const token = game.authTokens.get(playerId);
+  return token ? `${playerId}:${token}` : playerId;
+}
+
+function verifyAuth(game, playerId, providedToken) {
+  if (!game || !game.authTokens || !game.authTokens.has(playerId)) {
+    return true; // no token system yet (legacy)
+  }
+  return providedToken && providedToken === game.authTokens.get(playerId);
+}
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
@@ -30,9 +88,10 @@ socket.on('createGame', (data) => {
         return;
     }
 
-    const joinKey = uuidv4().slice(0, 8); // Short UUID
+    const prettyKey = generateMemorableCode();
+    const joinKey = normalizeJoinKey(prettyKey);
         const game = {
-            joinKey,
+            joinKey: prettyKey,   // store pretty version for display
             players: [{ id: playerId, nickname: nickname.trim() }],
             chat: [],
             lastActivity: Date.now(),
@@ -44,16 +103,20 @@ socket.on('createGame', (data) => {
             deck: [],
             hands: new Map(),
             currentPlayerId: null,
-            burnedCard: null
+            burnedCard: null,
+            authTokens: new Map()  // playerId -> secret token
         };
+    const myToken = generateAuthToken();
+    game.authTokens.set(playerId, myToken);
+
     games.set(joinKey, game);
 
     socket.playerId = playerId;
     socket.join(joinKey);
-    socket.join(playerId); // for private messages (hands, priest reveals) - symmetric with joinGame/reconnect
-    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
-        console.log(`Game created: ${joinKey} by ${nickname}`);
+    socket.join(`${playerId}:${myToken}`); // private room using token (not guessable from playerId)
+    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', prettyKey);
+        socket.emit('gameJoined', { joinKey: prettyKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        console.log(`Game created: ${prettyKey} by ${nickname}`);
 });
 
 // Join an existing game
@@ -64,7 +127,8 @@ socket.on('joinGame', (data) => {
         return;
     }
 
-    const game = games.get(joinKey);
+    const normalizedKey = normalizeJoinKey(joinKey);
+    const game = games.get(normalizedKey);
     if (!game) {
         socket.emit('error', 'Game not found');
         return;
@@ -75,9 +139,29 @@ socket.on('joinGame', (data) => {
         return;
     }
 
+    const displayKey = game.joinKey || normalizedKey;
+
+    // Ensure authTokens map exists (for old games)
+    if (!game.authTokens) game.authTokens = new Map();
+
     // Check if player already in game
     const existingPlayer = game.players.find(p => p.id === playerId);
     if (existingPlayer) {
+        // SECURITY: for existing playerId, require the correct authToken if one is on file
+        if (game.authTokens && game.authTokens.has(playerId)) {
+            const expected = game.authTokens.get(playerId);
+            const provided = data.authToken;
+            if (provided && provided !== expected) {
+                socket.emit('error', 'This player is already in the game with a different session.');
+                return;
+            }
+            if (!provided && expected) {
+                // No token provided but one exists: reject to prevent easy spoof from knowing only playerId
+                socket.emit('error', 'Valid session token required to rejoin as this player.');
+                return;
+            }
+        }
+
         // Update nickname if changed and not taken by others
         const trimmedNick = nickname.trim();
         if (existingPlayer.nickname !== trimmedNick) {
@@ -87,17 +171,17 @@ socket.on('joinGame', (data) => {
             }
             existingPlayer.nickname = trimmedNick;
             game.lastActivity = Date.now();
-    socket.playerId = playerId;
-    socket.join(joinKey);
-    socket.join(playerId); // for private messages (hands, priest reveals)
-    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
-        socket.to(joinKey).emit('playerJoined', { players: game.players });
-        console.log(`${trimmedNick} rejoined game: ${joinKey}`);
-        } else {
-            // Already joined with same nick
-            socket.emit('error', 'Already in game');
         }
+        const myToken = game.authTokens.get(playerId) || generateAuthToken();
+        game.authTokens.set(playerId, myToken);
+
+        socket.playerId = playerId;
+        socket.join(normalizedKey);
+        socket.join(`${playerId}:${myToken}`);
+        console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
+        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
+        console.log(`${trimmedNick} rejoined game: ${displayKey}`);
         return;
     }
 
@@ -124,30 +208,39 @@ socket.on('joinGame', (data) => {
     const player = { id: playerId, nickname: nickname.trim() };
     game.players.push(player);
     game.lastActivity = Date.now();
-    socket.playerId = playerId;
-    socket.join(joinKey);
-    socket.join(playerId);
-    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', joinKey);
-        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
-        socket.to(joinKey).emit('playerJoined', { players: game.players });
 
-        console.log(`${nickname} joined game: ${joinKey}`);
+    if (!game.authTokens) game.authTokens = new Map();
+    const myToken = generateAuthToken();
+    game.authTokens.set(playerId, myToken);
+
+    socket.playerId = playerId;
+    socket.join(normalizedKey);
+    socket.join(`${playerId}:${myToken}`);
+    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
+        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
+
+        console.log(`${nickname} joined game: ${displayKey}`);
 });
 
     // Leave game
     socket.on('leaveGame', (data) => {
-        const { playerId } = data;
+        const actorId = socket.playerId || data.playerId;
         for (const [key, game] of games) {
-            const index = game.players.findIndex(p => p.id === playerId);
+            if (!verifyAuth(game, actorId, data.authToken)) {
+                // still allow leave even on bad token for cleanup, but log
+                console.log('Leave with invalid token for', actorId);
+            }
+            const index = game.players.findIndex(p => p.id === actorId);
             if (index !== -1) {
                 game.players.splice(index, 1);
-                game.readyPlayers.delete(playerId);
+                game.readyPlayers.delete(actorId);
                 game.lastActivity = Date.now();
                 socket.to(key).emit('playerLeft', { players: game.players });
                 if (game.readyPhase) {
                     io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
                 }
-                console.log(`Player ${playerId} left game: ${key}`);
+                console.log(`Player ${actorId} left game: ${key}`);
                 break;
             }
         }
@@ -155,12 +248,17 @@ socket.on('joinGame', (data) => {
 
     // Kick player
     socket.on('kickPlayer', (data) => {
-        const { kickedPlayerId, playerId } = data;
+        const actorId = socket.playerId || data.playerId;
+        const { kickedPlayerId } = data;
         for (const [key, game] of games) {
-            const kicker = game.players.find(p => p.id === playerId);
-            if (kicker && game.players.length > 0 && game.players[0] && game.players[0].id === playerId) { // Only creator can kick
+            if (!verifyAuth(game, actorId, data.authToken)) {
+                socket.emit('error', 'Invalid session');
+                return;
+            }
+            const kicker = game.players.find(p => p.id === actorId);
+            if (kicker && game.players.length > 0 && game.players[0] && game.players[0].id === actorId) { // Only creator can kick
                 const kickedIndex = game.players.findIndex(p => p.id === kickedPlayerId);
-                if (kickedIndex !== -1 && kickedPlayerId !== playerId) {
+                if (kickedIndex !== -1 && kickedPlayerId !== actorId) {
                     const kickedPlayer = game.players.splice(kickedIndex, 1)[0];
                     game.readyPlayers.delete(kickedPlayerId);
                     game.lastActivity = Date.now();
@@ -192,15 +290,16 @@ socket.on('joinGame', (data) => {
 
 // Reconnect to game
 socket.on('reconnectGame', (data) => {
-    const { joinKey, playerId } = data;
+    const { joinKey, playerId, authToken } = data;
     console.log('Received reconnectGame for', joinKey, playerId);
-    const game = games.get(joinKey);
+    const normalizedKey = normalizeJoinKey(joinKey);
+    const game = games.get(normalizedKey);
     if (!game) {
         socket.emit('error', 'Game not found');
         return;
     }
     if (false) { // No expiry for testing
-        games.delete(joinKey);
+        games.delete(normalizedKey);
         socket.emit('error', 'Game expired');
         return;
     }
@@ -213,22 +312,38 @@ socket.on('reconnectGame', (data) => {
         socket.emit('error', 'Player not in game');
         return;
     }
-        socket.playerId = playerId;
-        socket.join(joinKey);
-        socket.join(playerId);
-        game.lastActivity = Date.now();
-        socket.emit('gameJoined', { joinKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted });
-
-        // Send current hand on reconnect if game is active
-        if (game.isStarted && game.hands && game.hands.has(playerId)) {
-            const h = game.hands.get(playerId);
-            socket.emit('privateHand', {
-                hand: h.map(c => ({ name: c.name, value: c.value }))
-            });
+    // Validate token if we have one stored
+    if (game.authTokens && game.authTokens.has(playerId)) {
+        const expected = game.authTokens.get(playerId);
+        if (!authToken || authToken !== expected) {
+            socket.emit('error', 'Invalid session for this player');
+            return;
         }
+    }
 
-        console.log(`Reconnected ${player.nickname} to game: ${joinKey}`);
-    });
+    const displayKey = game.joinKey || normalizedKey;
+    const token = game.authTokens ? game.authTokens.get(playerId) : null;
+
+    socket.playerId = playerId;
+    socket.join(normalizedKey);
+    if (token) {
+        socket.join(`${playerId}:${token}`);
+    } else {
+        socket.join(playerId); // legacy fallback
+    }
+    game.lastActivity = Date.now();
+    socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: token });
+
+    // Send current hand on reconnect if game is active
+    if (game.isStarted && game.hands && game.hands.has(playerId)) {
+        const h = game.hands.get(playerId);
+        socket.emit('privateHand', {
+            hand: h.map(c => ({ name: c.name, value: c.value }))
+        });
+    }
+
+    console.log(`Reconnected ${player.nickname} to game: ${displayKey}`);
+});
 
 // Send message
 socket.on('sendMessage', (data) => {
@@ -256,12 +371,16 @@ socket.on('sendMessage', (data) => {
 
 // Start ready phase
 socket.on('startReady', (data) => {
-    const { playerId } = data;
+    const actorId = socket.playerId || data.playerId;
     for (const [key, game] of games) {
-        if (game.players && game.players.length >= 2 && game.players[0] && game.players[0].id === playerId && !game.readyPhase && !game.isStarted) {
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (game.players && game.players.length >= 2 && game.players[0] && game.players[0].id === actorId && !game.readyPhase && !game.isStarted) {
             game.readyPhase = true;
             game.readyPlayers.clear();
-            game.readyPlayers.add(playerId);
+            game.readyPlayers.add(actorId);
             game.lastActivity = Date.now();
             io.to(key).emit('readyPhaseStarted');
             io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
@@ -273,14 +392,18 @@ socket.on('startReady', (data) => {
 
 // Toggle ready
 socket.on('toggleReady', (data) => {
-    const { playerId } = data;
+    const actorId = socket.playerId || data.playerId;
     for (const [key, game] of games) {
-        const player = game.players.find(p => p.id === playerId);
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        const player = game.players.find(p => p.id === actorId);
         if (player && game.readyPhase && !game.isStarted) {
-            if (game.readyPlayers.has(playerId)) {
-                game.readyPlayers.delete(playerId);
+            if (game.readyPlayers.has(actorId)) {
+                game.readyPlayers.delete(actorId);
             } else {
-                game.readyPlayers.add(playerId);
+                game.readyPlayers.add(actorId);
             }
             game.lastActivity = Date.now();
             io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
@@ -289,7 +412,7 @@ socket.on('toggleReady', (data) => {
                 initializeGame(game, key);
                 console.log(`Game auto-started for ${key}`);
             }
-            console.log(`Player ${playerId} toggled ready in game: ${key}`);
+            console.log(`Player ${actorId} toggled ready in game: ${key}`);
             break;
         }
     }
@@ -297,24 +420,33 @@ socket.on('toggleReady', (data) => {
 
 // Play a card (core game action)
 socket.on('playCard', (data) => {
-    const { playerId, cardIndex, targetPlayerId, guess } = data;
+    // SECURITY: Use the playerId that was established when this socket joined the game.
+    // Do not fully trust the playerId from the client payload for auth decisions.
+    const actorId = socket.playerId || data.playerId;
+    const { cardIndex, targetPlayerId, guess } = data;
+
     for (const [key, game] of games) {
         if (!game.isStarted || game.roundOver) continue;
 
-        const pIdx = game.players.findIndex(pp => pp.id === playerId);
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+
+        const pIdx = game.players.findIndex(pp => pp.id === actorId);
         if (pIdx === -1) continue;
 
-        if (game.currentPlayerId !== playerId) {
+        if (game.currentPlayerId !== actorId) {
             // Not your turn
             socket.emit('error', 'Not your turn');
             break;
         }
-        if (game.eliminated.has(playerId)) {
+        if (game.eliminated.has(actorId)) {
             socket.emit('error', 'You are out of this round');
             break;
         }
 
-        const hand = game.hands.get(playerId) || [];
+        const hand = game.hands.get(actorId) || [];
         if (cardIndex < 0 || cardIndex >= hand.length) {
             socket.emit('error', 'Invalid card selection');
             break;
@@ -337,7 +469,7 @@ socket.on('playCard', (data) => {
         if (needsTarget && targetPlayerId) {
             // Only validate if a target was actually chosen.
             // If no target (all others protected/eliminated), we allow the play — effect will fizzle.
-            if (targetPlayerId === playerId && !allowsSelf) {
+            if (targetPlayerId === actorId && !allowsSelf) {
                 socket.emit('error', 'This card requires a different target player');
                 break;
             }
@@ -357,22 +489,22 @@ socket.on('playCard', (data) => {
         const playedCard = hand.splice(cardIndex, 1)[0];
 
         // Record
-        if (!game.discards.has(playerId)) game.discards.set(playerId, []);
-        game.discards.get(playerId).push(playedCard);
-        game.lastPlayed.set(playerId, playedCard);
+        if (!game.discards.has(actorId)) game.discards.set(actorId, []);
+        game.discards.get(actorId).push(playedCard);
+        game.lastPlayed.set(actorId, playedCard);
         game.lastActivity = Date.now();
 
         const actor = game.players[pIdx];
 
         // Send updated hand to the player who just played (they now have one less card)
-        const updatedHand = game.hands.get(playerId) || [];
-        io.to(playerId).emit('privateHand', {
+        const updatedHand = game.hands.get(actorId) || [];
+        io.to(getPrivateRoom(game, actorId)).emit('privateHand', {
             hand: updatedHand.map(c => ({ name: c.name, value: c.value }))
         });
 
         // Public announcement of the play
         io.to(key).emit('cardPlayed', {
-            playerId,
+            playerId: actorId,
             nickname: actor.nickname,
             card: { name: playedCard.name, value: playedCard.value },
             targetPlayerId: targetPlayerId || null,
@@ -380,7 +512,7 @@ socket.on('playCard', (data) => {
         });
 
         // Resolve effect (may eliminate, reveal, swap, etc.)
-        resolveCardEffect(game, key, playerId, playedCard, targetPlayerId, guess);
+        resolveCardEffect(game, key, actorId, playedCard, targetPlayerId, guess);
 
         // If the player who just acted is still in and round not over, their turn ends
         if (!game.roundOver) {
@@ -391,12 +523,16 @@ socket.on('playCard', (data) => {
     }
 });
 
-// Safety net: client can request their current hand (e.g. if a privateHand was missed on round start or reconnect)
+// Also harden getMyHand
 socket.on('getMyHand', (data) => {
-    const { playerId } = data;
+    const actorId = socket.playerId || data.playerId;
     for (const [key, game] of games) {
-        if (game.isStarted && game.hands && game.hands.has(playerId)) {
-            const h = game.hands.get(playerId);
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (game.isStarted && game.hands && game.hands.has(actorId)) {
+            const h = game.hands.get(actorId);
             socket.emit('privateHand', {
                 hand: h.map(c => ({ name: c.name, value: c.value }))
             });
@@ -509,7 +645,7 @@ function startNewRound(game, key, isFirstRound = false) {
     // Private hands (post-draw for the starting player, 1 card for others)
     game.players.forEach(player => {
         const h = game.hands.get(player.id) || [];
-        io.to(player.id).emit('privateHand', { hand: h.map(c => ({ name: c.name, value: c.value })) });
+        io.to(getPrivateRoom(game, player.id)).emit('privateHand', { hand: h.map(c => ({ name: c.name, value: c.value })) });
     });
 
     // Announce the draw and whose turn it is (client uses this to enable actionArea)
@@ -545,7 +681,7 @@ function drawForPlayer(game, key, playerId) {
     }
 
     // Send updated private hand to the player
-    io.to(playerId).emit('privateHand', {
+    io.to(getPrivateRoom(game, playerId)).emit('privateHand', {
         hand: hand.map(c => ({ name: c.name, value: c.value }))
     });
 
@@ -649,7 +785,7 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
             const targetPlayer = game.players.find(p => p.id === targetId);
             const targetHand = (game.hands.get(targetId) || []).map(c => ({ name: c.name, value: c.value }));
             // Only the actor sees the hand
-            io.to(actorId).emit('priestReveal', {
+            io.to(getPrivateRoom(game, actorId)).emit('priestReveal', {
                 targetId,
                 nickname: targetPlayer ? targetPlayer.nickname : '',
                 hand: targetHand
@@ -731,7 +867,7 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
 
             // Notify the target of their new hand (if not eliminated)
             if (!game.eliminated.has(princeTarget)) {
-                io.to(princeTarget).emit('privateHand', {
+                io.to(getPrivateRoom(game, princeTarget)).emit('privateHand', {
                     hand: tHand.map(c => ({ name: c.name, value: c.value }))
                 });
             }
@@ -767,10 +903,10 @@ function resolveCardEffect(game, key, actorId, playedCard, targetId, guess) {
             game.hands.set(targetId, actorHand);
 
             // Send new private hands
-            io.to(actorId).emit('privateHand', {
+            io.to(getPrivateRoom(game, actorId)).emit('privateHand', {
                 hand: tHand.map(c => ({ name: c.name, value: c.value }))
             });
-            io.to(targetId).emit('privateHand', {
+            io.to(getPrivateRoom(game, targetId)).emit('privateHand', {
                 hand: actorHand.map(c => ({ name: c.name, value: c.value }))
             });
 

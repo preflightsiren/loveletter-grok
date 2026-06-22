@@ -9,10 +9,16 @@
             --parchment: #f4e9d1;
             --parchment-dark: #e8d9b5;
             --wood: #2c2115;
-            --gold: #b38b4d;
-            --gold-light: #d4af37;
-            --burgundy: #5c2a1e;
+            --gold: #c5a25f;
+            --gold-light: #e8c97a;
+            --gold-bright: #f0d58a;
+            --burgundy: #6b2e22;
+            --crimson: #9c2e2e;
             --deep-red: #7a2f1e;
+            --royal-blue: #2f4a7a;
+            --azure: #3a5f9c;
+            --emerald: #2e5a3c;
+            --purple: #4a2f5e;
             --ink: #2c2115;
             --ink-light: #3f2a1f;
         }
@@ -25,9 +31,11 @@
             font-family: Georgia, 'Times New Roman', Times, serif;
             background-color: #2c2115;
             background-image: 
-                linear-gradient(rgba(60,45,30,0.22) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(60,45,30,0.22) 1px, transparent 1px);
-            background-size: 22px 22px;
+                linear-gradient(rgba(80,55,35,0.18) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(80,55,35,0.18) 1px, transparent 1px),
+                radial-gradient(circle at 30% 20%, rgba(139, 69, 46, 0.12) 0%, transparent 50%),
+                radial-gradient(circle at 75% 70%, rgba(75, 92, 120, 0.10) 0%, transparent 55%);
+            background-size: 22px 22px, 22px 22px, 100% 100%, 100% 100%;
             color: var(--ink);
             margin: 0;
             padding: 24px 16px;
@@ -46,23 +54,30 @@
             font-family: Georgia, serif;
             font-size: 2.1rem;
             letter-spacing: 3px;
-            color: var(--gold-light);
-            text-shadow: 1px 1px 0 #3f2a1f, 2px 2px 0 #2c2115;
+            color: var(--gold-bright);
+            text-shadow: 
+                1px 1px 0 #3f2a1f, 
+                2px 2px 0 #2c2115,
+                0 0 12px rgba(200, 140, 50, 0.3);
             margin: 0;
         }
 
         .title-banner .subtitle {
             font-size: 0.85rem;
-            color: #c5a26f;
+            color: #d4af37;
             letter-spacing: 2px;
             margin-top: 2px;
+            text-shadow: 0 1px 0 rgba(0,0,0,0.3);
         }
 
         .container, .game-panel {
             background: var(--parchment);
             border: 4px solid var(--ink-light);
             border-radius: 4px;
-            box-shadow: 0 6px 0 #1f170f, 0 10px 25px rgba(0,0,0,0.5);
+            box-shadow: 
+                0 6px 0 #1f170f, 
+                0 10px 25px rgba(0,0,0,0.5),
+                inset 0 0 60px rgba(139, 92, 46, 0.08);
             padding: 22px 24px;
             width: 100%;
             max-width: 720px;
@@ -90,8 +105,9 @@
             font-size: 1.65rem;
             margin: 4px 0 14px;
             letter-spacing: 1.5px;
-            border-bottom: 1px solid var(--gold);
+            border-bottom: 2px solid var(--gold);
             padding-bottom: 8px;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.15);
         }
 
         .game-panel h1 {
@@ -119,7 +135,7 @@
         button {
             width: 100%;
             padding: 10px 14px;
-            background: var(--parchment-dark);
+            background: linear-gradient(180deg, #e8d9b5 0%, var(--parchment-dark) 100%);
             color: var(--ink);
             border: 3px solid var(--ink-light);
             font-family: Georgia, serif;
@@ -133,9 +149,9 @@
         }
 
         button:hover {
-            background: #e8d9b5;
+            background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 100%);
             border-color: var(--gold);
-            color: var(--burgundy);
+            color: var(--ink);
         }
 
         button:active {
@@ -147,6 +163,37 @@
             opacity: 0.55;
             cursor: not-allowed;
             background: #d9ccaa;
+        }
+
+        #startReady {
+            background: linear-gradient(180deg, #3a5f9c 0%, var(--royal-blue) 100%);
+            color: #f4e9d1;
+            border-color: #1f314d;
+        }
+
+        #startReady:hover {
+            background: linear-gradient(180deg, #5f8bc4 0%, #3a5f9c 100%);
+            color: #fff;
+        }
+
+        #toggleReady {
+            background: linear-gradient(180deg, #2e5a3c 0%, var(--emerald) 100%);
+            color: #f4e9d1;
+            border-color: #1e3a28;
+        }
+
+        #toggleReady:hover {
+            background: linear-gradient(180deg, #4c8c5e 0%, #2e5a3c 100%);
+        }
+
+        #leaveGame {
+            background: linear-gradient(180deg, #9c2e2e 0%, var(--crimson) 100%);
+            color: #f4e9d1;
+            border-color: #5c1a1a;
+        }
+
+        #leaveGame:hover {
+            background: linear-gradient(180deg, #c44a4a 0%, #9c2e2e 100%);
         }
 
         .error {
@@ -173,16 +220,19 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: #e8d9b5;
+            background: linear-gradient(180deg, #e8d9b5 0%, #d9c7a0 100%);
             border: 2px solid var(--ink-light);
+            border-bottom-color: var(--gold);
             padding: 6px 12px;
             margin: -6px -6px 14px;
             border-radius: 2px;
+            box-shadow: 0 2px 0 rgba(0,0,0,0.15);
         }
 
         .join-key {
-            background: #fffef5;
-            border: 2px solid var(--gold);
+            background: linear-gradient(180deg, #fffef5 0%, #f4e9d1 100%);
+            border: 3px solid var(--gold);
+            border-image: linear-gradient(to bottom, var(--gold), #8b5a2b) 1;
             padding: 8px 14px;
             text-align: center;
             font-family: monospace;
@@ -190,6 +240,7 @@
             color: var(--burgundy);
             font-size: 0.95rem;
             margin-bottom: 16px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
         }
 
         .players {
@@ -197,6 +248,7 @@
             border: 2px solid var(--ink-light);
             padding: 12px 14px;
             margin-bottom: 16px;
+            box-shadow: inset 0 2px 4px rgba(60, 40, 25, 0.08);
         }
 
         .players h2 {
@@ -204,6 +256,8 @@
             font-size: 1.05rem;
             color: var(--burgundy);
             letter-spacing: 1px;
+            border-bottom: 1px solid #c9b38a;
+            padding-bottom: 3px;
         }
 
         .players ul {
@@ -224,9 +278,36 @@
             border-bottom: none;
         }
 
+        .heraldry {
+            display: inline-block;
+            width: 40px;
+            height: 44px;
+            font-size: 19px;
+            line-height: 44px;
+            text-align: center;
+            vertical-align: middle;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.4),
+                        0 0 0 1px #3f2a1f;
+            min-width: 40px;
+            min-height: 44px;
+            max-width: 40px;
+            max-height: 44px;
+            margin-right: 6px;
+            overflow: hidden;
+        }
+
+        .heraldry.shield {
+            /* Classic British heater shield */
+            clip-path: polygon(8% 2%, 92% 2%, 97% 28%, 50% 100%, 3% 28%);
+            box-shadow: inset 0 0.5px 0 rgba(255,255,255,0.15),
+                        inset 0 -0.5px 0 rgba(0,0,0,0.2);
+            /* inherits centering and size from .heraldry; this just clips the shape */
+        }
+
         .current-player {
             font-weight: bold;
-            color: var(--burgundy);
+            color: var(--crimson);
+            text-shadow: 0 1px 0 rgba(255,240,200,0.4);
         }
 
         .ready-player {
@@ -261,12 +342,15 @@
             display: flex;
             flex-direction: column;
             margin-bottom: 12px;
+            box-shadow: inset 0 2px 4px rgba(60, 40, 25, 0.08);
         }
 
         .chat h2 {
             margin: 0 0 6px;
             font-size: 1rem;
             color: var(--burgundy);
+            border-bottom: 1px solid #c9b38a;
+            padding-bottom: 2px;
         }
 
         .chat-messages {
@@ -351,7 +435,9 @@
         #readyStatus {
             margin-top: 8px;
             font-size: 0.9rem;
-            color: var(--ink-light);
+            color: var(--emerald);
+            font-weight: 600;
+            letter-spacing: 0.3px;
         }
 
         /* Game area */
@@ -361,10 +447,10 @@
 
         .section-title {
             font-size: 1rem;
-            color: var(--burgundy);
+            color: var(--crimson);
             margin: 12px 0 6px;
             letter-spacing: 1px;
-            border-bottom: 1px solid #c9b38a;
+            border-bottom: 2px solid var(--gold);
             padding-bottom: 2px;
         }
 
@@ -374,7 +460,8 @@
             flex-wrap: wrap;
             gap: 12px;
             justify-content: flex-start;
-            padding: 6px 2px;
+            padding: 6px 2px 26px;
+            position: relative;
         }
 
         .card {
@@ -394,6 +481,17 @@
             font-family: Georgia, serif;
             transition: transform 0.1s ease, box-shadow 0.1s ease;
             user-select: none;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(to right, var(--gold), #8b5a2b, var(--gold));
         }
 
         .card::after {
@@ -407,16 +505,41 @@
         }
 
         .card:hover {
-            transform: translateY(-3px);
-            box-shadow: 3px 6px 0 #2c2115, inset 0 0 0 1px #f4e9d1;
+            transform: translateY(-3px) scale(1.01);
+            box-shadow: 3px 6px 0 #2c2115, 0 0 0 1px rgba(197, 162, 95, 0.5), inset 0 0 0 1px #f4e9d1;
         }
 
         .card:disabled,
         .card.disabled {
             opacity: 0.5;
             cursor: not-allowed;
-            filter: grayscale(0.3);
+            filter: grayscale(0.25);
         }
+
+        /* Colored card accents by type */
+        .card.card-guard { border-color: #4a6fa5; }
+        .card.card-guard::before { background: linear-gradient(to right, #4a6fa5, #6b8fc4, #4a6fa5); }
+
+        .card.card-priest { border-color: #5a3f7a; }
+        .card.card-priest::before { background: linear-gradient(to right, #5a3f7a, #7d5a9e, #5a3f7a); }
+
+        .card.card-baron { border-color: #9c2e2e; }
+        .card.card-baron::before { background: linear-gradient(to right, #9c2e2e, #c44a4a, #9c2e2e); }
+
+        .card.card-handmaid { border-color: #2e5a3c; }
+        .card.card-handmaid::before { background: linear-gradient(to right, #2e5a3c, #4c8c5e, #2e5a3c); }
+
+        .card.card-prince { border-color: #3a5f9c; }
+        .card.card-prince::before { background: linear-gradient(to right, #3a5f9c, #5f8bc4, #3a5f9c); }
+
+        .card.card-king { border-color: #b38b2e; }
+        .card.card-king::before { background: linear-gradient(to right, #c5a25f, #f0d58a, #c5a25f); }
+
+        .card.card-countess { border-color: #6b2e5a; }
+        .card.card-countess::before { background: linear-gradient(to right, #6b2e5a, #9c4a7a, #6b2e5a); }
+
+        .card.card-princess { border-color: #8c3a3a; }
+        .card.card-princess::before { background: linear-gradient(to right, #8c3a3a, #c25a5a, #8c3a3a); }
 
         .card .card-value {
             position: absolute;
@@ -424,15 +547,17 @@
             left: 7px;
             font-size: 0.95rem;
             font-weight: bold;
-            color: var(--burgundy);
+            color: var(--crimson);
             line-height: 1;
+            text-shadow: 0 1px 0 rgba(255,255,255,0.6);
         }
 
         .card .card-icon {
-            font-size: 1.65rem;
+            font-size: 1.75rem;
             line-height: 1;
             margin: 4px 0 2px;
-            opacity: 0.9;
+            opacity: 0.92;
+            filter: drop-shadow(0 1px 1px rgba(0,0,0,0.25));
         }
 
         .card .card-name {
@@ -456,16 +581,76 @@
         }
 
         .card.current-turn {
-            border-color: var(--gold-light);
-            box-shadow: 0 0 0 3px rgba(211, 175, 55, 0.35), 2px 3px 0 #2c2115;
+            box-shadow: 
+                0 0 0 3px var(--gold-bright), 
+                3px 5px 0 #2c2115,
+                inset 0 0 0 2px rgba(240, 213, 138, 0.4);
+        }
+
+        /* Rich hover description for cards */
+        .card .card-tooltip {
+            position: absolute;
+            left: 50%;
+            top: 100%;
+            transform: translateX(-50%);
+            min-width: 200px;
+            max-width: 230px;
+            background: #2c2115;
+            color: #f4e9d1;
+            border: 2px solid var(--gold);
+            border-radius: 4px;
+            padding: 8px 10px;
+            font-size: 0.76rem;
+            line-height: 1.3;
+            text-align: left;
+            box-shadow: 3px 4px 0 #1f170f, 0 0 0 1px rgba(197,162,95,0.3);
+            z-index: 30;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s ease;
+            white-space: normal;
+            margin-top: 4px;
+        }
+
+        .card:hover .card-tooltip {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .card-tooltip .tooltip-name {
+            font-weight: 700;
+            color: var(--gold-bright);
+            font-size: 0.92rem;
+            margin-bottom: 1px;
+            letter-spacing: 0.5px;
+        }
+
+        .card-tooltip .tooltip-value {
+            font-size: 0.68rem;
+            color: #c5a26f;
+            margin-bottom: 5px;
+        }
+
+        .card-tooltip .tooltip-flavor {
+            font-style: italic;
+            color: #e8c97a;
+            margin-bottom: 5px;
+            line-height: 1.25;
+            border-bottom: 1px dotted #5c4630;
+            padding-bottom: 4px;
+        }
+
+        .card-tooltip .tooltip-effect {
+            color: #e8d9b5;
         }
 
         /* Action selectors */
         #actionArea {
-            background: #fffef5;
+            background: linear-gradient(180deg, #fffef5 0%, #f4e9d1 100%);
             border: 2px solid var(--ink-light);
             padding: 11px 13px;
             margin-top: 12px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
         }
 
         #targetSelector, #guessSelector {
@@ -476,8 +661,9 @@
         #guessSelector strong {
             display: block;
             margin-bottom: 4px;
-            color: var(--burgundy);
-            font-size: 0.9rem;
+            color: var(--crimson);
+            font-size: 0.92rem;
+            letter-spacing: 0.3px;
         }
 
         #targetButtons button,
@@ -493,9 +679,21 @@
 
         #targetButtons button:hover,
         #guessButtons button:hover {
-            background: var(--gold-light);
+            background: var(--gold-bright);
             color: #2c2115;
             border-color: var(--gold);
+        }
+
+        #targetButtons .heraldry {
+            margin-right: 5px;
+            width: 28px;
+            height: 30px;
+            font-size: 16px;
+            line-height: 30px;
+            min-width: 28px;
+            min-height: 30px;
+            max-width: 28px;
+            max-height: 30px;
         }
 
         /* Player status indicators */
@@ -506,13 +704,16 @@
 
         /* Current turn banner */
         #currentTurn {
-            background: #e8d9b5;
-            border: 1px solid var(--gold);
-            padding: 6px 10px;
+            background: linear-gradient(180deg, #f4e9d1 0%, #e8d9b5 100%);
+            border: 2px solid var(--gold);
+            padding: 6px 12px;
             font-weight: bold;
             color: var(--burgundy);
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
             margin: 4px 0;
+            border-radius: 2px;
+            box-shadow: 1px 2px 0 #3f2a1f;
         }
 
         .medieval-divider {
@@ -534,7 +735,7 @@
         <input type="text" id="nickname" placeholder="Your name at court" maxlength="20">
         <div class="lobby-actions">
             <button id="createGame">Create a New Game</button>
-            <input type="text" id="joinKeyInput" placeholder="Enter join key (e.g. 8 characters)" maxlength="8">
+            <input type="text" id="joinKeyInput" placeholder="Enter join key (e.g. golden-rose or ancient-bold-42)" maxlength="60">
             <button id="joinGame">Join Existing Game</button>
         </div>
         <div id="error" class="error"></div>
@@ -545,7 +746,7 @@
         <div class="game-panel">
             <div class="game-header">
                 <div><strong>Love Letter</strong> — Court Intrigue</div>
-                <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e;">Join Key: —</div>
+                <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e; word-break: break-all; max-width: 220px; text-align: right;">Join Key: —</div>
             </div>
 
             <div class="players">

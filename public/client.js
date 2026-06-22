@@ -5,6 +5,7 @@ console.log('Socket created, connected:', socket.connected);
 // Per-tab player ID (sessionStorage isolates tabs/windows for multi-user testing)
 const playerId = sessionStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
 sessionStorage.setItem('playerId', playerId);
+let myAuthToken = sessionStorage.getItem('authToken') || null;
 
 // Surface server 'error' emits (e.g. join rejected mid-round) in the UI
 socket.on('error', (message) => {
@@ -112,7 +113,14 @@ socket.on('roundStarted', (data) => {
     gameIsStarted = true;
 
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
-    currentTurnSpan.textContent = current ? `${current.nickname}'s turn` : 'Waiting...';
+    currentTurnSpan.innerHTML = '';
+    if (current) {
+        const h = getHeraldry(current.id, current.nickname);
+        currentTurnSpan.appendChild(createHeraldryBadge(h));
+        currentTurnSpan.appendChild(document.createTextNode(` ${current.nickname}'s turn`));
+    } else {
+        currentTurnSpan.textContent = 'Waiting...';
+    }
 
     if (currentPlayers.length > 0) {
         updatePlayers(currentPlayers, [], currentTurnPlayerId);
@@ -124,7 +132,14 @@ socket.on('roundStarted', (data) => {
 socket.on('turnChanged', (data) => {
     currentTurnPlayerId = data.currentPlayerId || null;
     const current = currentPlayers.find(p => p.id === currentTurnPlayerId);
-    currentTurnSpan.textContent = current ? `${current.nickname}'s turn` : 'Waiting...';
+    currentTurnSpan.innerHTML = '';
+    if (current) {
+        const h = getHeraldry(current.id, current.nickname);
+        currentTurnSpan.appendChild(createHeraldryBadge(h));
+        currentTurnSpan.appendChild(document.createTextNode(` ${current.nickname}'s turn`));
+    } else {
+        currentTurnSpan.textContent = 'Waiting...';
+    }
 
     // Guard (and other targeting cards like Priest/Baron/King) action state
     // (pending guess/target selectors) must expire at the beginning of the
@@ -220,6 +235,8 @@ socket.on('gameOver', (data) => {
     document.getElementById('gameSection').style.display = 'none';
     document.getElementById('lobby').style.display = 'block';
     joined = false;
+    myAuthToken = null;
+    try { sessionStorage.removeItem('authToken'); } catch (e) {}
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
     document.getElementById('joinKey').textContent = 'Join Key: ';
@@ -234,10 +251,12 @@ socket.on('gameEnded', (data) => {
     alert(data.message);
     sessionStorage.removeItem('gameKey');
     sessionStorage.removeItem('playerId');
+    sessionStorage.removeItem('authToken');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.getElementById('lobby').style.display = 'block';
     joined = false;
+    myAuthToken = null;
     // Clear UI
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
@@ -249,11 +268,11 @@ socket.on('gameEnded', (data) => {
 });
 
 startReadyButton.addEventListener('click', () => {
-    socket.emit('startReady', { playerId });
+    socket.emit('startReady', { playerId, authToken: myAuthToken });
 });
 
 toggleReadyButton.addEventListener('click', () => {
-    socket.emit('toggleReady', { playerId });
+    socket.emit('toggleReady', { playerId, authToken: myAuthToken });
     toggleReadyButton.textContent = toggleReadyButton.textContent === 'Ready' ? 'Unready' : 'Ready';
 });
 
@@ -271,10 +290,12 @@ socket.on('kicked', (data) => {
     alert(data.message);
     sessionStorage.removeItem('gameKey');
     sessionStorage.removeItem('playerId');
+    sessionStorage.removeItem('authToken');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.getElementById('lobby').style.display = 'block';
     joined = false;
+    myAuthToken = null;
     // Clear chat and players
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
@@ -294,13 +315,15 @@ messageInput.addEventListener('keypress', (e) => {
 });
 
 document.getElementById('leaveGame').addEventListener('click', () => {
-    socket.emit('leaveGame', { playerId });
+    socket.emit('leaveGame', { playerId, authToken: myAuthToken });
     sessionStorage.removeItem('gameKey');
     sessionStorage.removeItem('playerId');
+    sessionStorage.removeItem('authToken');
     // Switch to lobby
     document.getElementById('gameSection').style.display = 'none';
     document.getElementById('lobby').style.display = 'block';
     joined = false;
+    myAuthToken = null;
     // Clear chat and players
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
@@ -355,7 +378,27 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
             statusHtml += ' <span class="status-icon ready-player">(Ready)</span>';
         }
 
-        li.innerHTML = `<span>${player.nickname}</span> <span style="margin-left:auto; font-size:0.85rem; color:#5c4630;">[${tokens} ✉︎]</span>${statusHtml}`;
+        // Insert heraldry badge
+        const heraldry = getHeraldry(player.id, player.nickname);
+        li.appendChild(createHeraldryBadge(heraldry));
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = player.nickname;
+        li.appendChild(nameSpan);
+
+        const tokenSpan = document.createElement('span');
+        tokenSpan.style.marginLeft = 'auto';
+        tokenSpan.style.fontSize = '0.85rem';
+        tokenSpan.style.color = '#5c4630';
+        tokenSpan.textContent = `[${tokens} ✉︎]`;
+        li.appendChild(tokenSpan);
+
+        // Add status icons via innerHTML for the remaining part (small)
+        if (statusHtml) {
+            const statusSpan = document.createElement('span');
+            statusSpan.innerHTML = statusHtml;
+            li.appendChild(statusSpan);
+        }
 
         if (isCreator && player.id !== playerId && !eliminatedPlayers.has(player.id)) {
             const kickBtn = document.createElement('button');
@@ -363,7 +406,7 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
             kickBtn.className = 'kick-btn';
             kickBtn.title = 'Remove from court';
             kickBtn.addEventListener('click', () => {
-                socket.emit('kickPlayer', { kickedPlayerId: player.id, playerId });
+                socket.emit('kickPlayer', { kickedPlayerId: player.id, playerId, authToken: myAuthToken });
             });
             li.appendChild(kickBtn);
         }
@@ -385,29 +428,106 @@ function showError(message) {
     setTimeout(() => errorDiv.textContent = '', 5000);
 }
 
-const CARD_TOOLTIPS = {
-    'Guard': 'Name a card other than Guard. If the target has it, they are eliminated.',
-    'Priest': 'Privately look at another player\'s hand.',
-    'Baron': 'Compare hands with another player. The one with the lower value is eliminated.',
-    'Handmaid': 'You are immune to other players\' card effects until your next turn.',
-    'Prince': 'Choose a player (including yourself). They discard their hand and draw a new one. Princess causes elimination.',
-    'King': 'Swap hands with another player.',
-    'Countess': 'If you hold the King or Prince, you must play the Countess instead.',
-    'Princess': 'If you play this card (or are forced to discard it), you are eliminated.'
+/* === Simplified British Heraldry (deterministic per player) === */
+const HERALDIC_TINCTURES = [
+  { name: 'Or',        hex: '#E8C872', isMetal: true  },  // Gold
+  { name: 'Argent',    hex: '#EDEDED', isMetal: true  },  // Silver
+  { name: 'Gules',     hex: '#9C2E2E', isMetal: false },  // Red
+  { name: 'Azure',     hex: '#1E3A5F', isMetal: false },  // Blue
+  { name: 'Vert',      hex: '#1B4D3E', isMetal: false },  // Green
+  { name: 'Sable',     hex: '#222222', isMetal: false },  // Black
+  { name: 'Purpure',   hex: '#4A235A', isMetal: false }   // Purple
+];
+
+// Classic charges used in British heraldry
+const HERALDIC_CHARGES = ['🦁', '🦅', '✠', '⚜', '✦'];
+
+function getHeraldry(playerId, nickname = '') {
+  const seed = (playerId || nickname || 'x').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const tincture = HERALDIC_TINCTURES[seed % HERALDIC_TINCTURES.length];
+  const charge = HERALDIC_CHARGES[seed % HERALDIC_CHARGES.length];
+  return { color: tincture.hex, charge, isMetal: tincture.isMetal };
+}
+
+function createHeraldryBadge(heraldry) {
+  const el = document.createElement('span');
+  el.className = 'heraldry shield';
+  el.style.backgroundColor = heraldry.color;
+  el.style.color = heraldry.isMetal ? '#2C2115' : '#F5F0E6';
+  el.style.textShadow = heraldry.isMetal 
+    ? '0 0 1px #3f2a1f' 
+    : '0 0 1px rgba(255,255,255,0.5)';
+  el.textContent = heraldry.charge;
+  el.title = 'Arms';
+  return el;
+}
+
+const CARD_DATA = {
+    'Guard': {
+        icon: '🛡️',
+        value: 1,
+        flavor: 'The humble soldier. Trust no one.',
+        effect: 'Name a card other than Guard. If the target holds it, they are eliminated.'
+    },
+    'Priest': {
+        icon: '📜',
+        value: 2,
+        flavor: 'The eyes of the church see all secrets.',
+        effect: 'Privately look at another player\'s hand.'
+    },
+    'Baron': {
+        icon: '⚔️',
+        value: 3,
+        flavor: 'A duel of honor. The weaker falls.',
+        effect: 'Compare hands with another player. The lower value is eliminated.'
+    },
+    'Handmaid': {
+        icon: '👑',
+        value: 4,
+        flavor: 'Protected by virtue and silk.',
+        effect: 'You are immune to other players\' card effects until your next turn.'
+    },
+    'Prince': {
+        icon: '🤴',
+        value: 5,
+        flavor: 'Royal decree: discard and draw anew.',
+        effect: 'Choose a player (including yourself). They discard their hand and draw a new one. If they discard Princess, they are eliminated.'
+    },
+    'King': {
+        icon: '👑',
+        value: 6,
+        flavor: 'The crown exchanges its burdens.',
+        effect: 'Swap hands with another player.'
+    },
+    'Countess': {
+        icon: '👸',
+        value: 7,
+        flavor: 'A lady of too much influence to ignore.',
+        effect: 'If you hold the King or Prince with the Countess, you must play the Countess.'
+    },
+    'Princess': {
+        icon: '👸',
+        value: 8,
+        flavor: 'The most precious. Touch her and you perish.',
+        effect: 'If you play this card (or are forced to discard it), you are eliminated.'
+    }
 };
 
 function getCardIcon(name) {
-    const icons = {
-        'Guard': '🛡️',
-        'Priest': '📜',
-        'Baron': '⚔️',
-        'Handmaid': '👑',
-        'Prince': '🤴',
-        'King': '👑',
-        'Countess': '👸',
-        'Princess': '👸'
-    };
-    return icons[name] || '◆';
+    return (CARD_DATA[name] && CARD_DATA[name].icon) || '◆';
+}
+
+function getCardTooltipHTML(card) {
+    const data = CARD_DATA[card.name] || { flavor: '', effect: '' };
+    const val = data.value || card.value;
+    return `
+        <div class="card-tooltip">
+            <div class="tooltip-name">${card.name}</div>
+            <div class="tooltip-value">Value ${val}</div>
+            <div class="tooltip-flavor">${data.flavor || ''}</div>
+            <div class="tooltip-effect">${data.effect || ''}</div>
+        </div>
+    `;
 }
 
 function renderHand() {
@@ -420,7 +540,8 @@ function renderHand() {
 
     currentHand.forEach((card, idx) => {
         const cardEl = document.createElement('div');
-        cardEl.className = 'card';
+        const typeClass = 'card-' + card.name.toLowerCase();
+        cardEl.className = `card ${typeClass}`;
         if (isMyTurn) cardEl.classList.add('current-turn');
 
         const mustPlayCountess = hasCountess && hasRoyal && card.name !== 'Countess';
@@ -430,17 +551,17 @@ function renderHand() {
         }
 
         const icon = getCardIcon(card.name);
-        const tooltip = mustPlayCountess
-            ? 'You must play the Countess when holding it with King or Prince'
-            : (CARD_TOOLTIPS[card.name] || '');
+        const tooltipHTML = mustPlayCountess
+            ? `<div class="card-tooltip"><div class="tooltip-name">${card.name}</div><div class="tooltip-effect">You must play the Countess when holding it together with King or Prince.</div></div>`
+            : getCardTooltipHTML(card);
 
         cardEl.innerHTML = `
             <div class="card-value">${card.value}</div>
             <div class="card-icon">${icon}</div>
             <div class="card-name">${card.name}</div>
             <div class="card-bottom">${card.value} — ${card.name.slice(0,3).toUpperCase()}</div>
+            ${tooltipHTML}
         `;
-        cardEl.title = tooltip;
 
         cardEl.addEventListener('click', () => {
             if (!isMyTurn) return;
@@ -501,7 +622,11 @@ function handlePlayCard(cardIndex, cardName) {
             // Multiple targets: show buttons for the user to choose
             validTargets.forEach(p => {
                 const tBtn = document.createElement('button');
-                tBtn.textContent = p.nickname;
+                const h = getHeraldry(p.id, p.nickname);
+                const badge = createHeraldryBadge(h);
+                badge.style.marginRight = '5px';
+                tBtn.appendChild(badge);
+                tBtn.appendChild(document.createTextNode(p.nickname));
                 tBtn.style.margin = '2px';
                 tBtn.addEventListener('click', () => {
                     pendingPlay.targetPlayerId = p.id;
@@ -543,6 +668,7 @@ function sendPlayCard() {
     if (!pendingPlay) return;
     socket.emit('playCard', {
         playerId,
+        authToken: myAuthToken,
         cardIndex: pendingPlay.cardIndex,
         targetPlayerId: pendingPlay.targetPlayerId || null,
         guess: pendingPlay.guess || null
@@ -571,7 +697,7 @@ joinButton.addEventListener('click', () => {
         showError('Nickname and join key are required');
         return;
     }
-    socket.emit('joinGame', { joinKey, nickname, playerId });
+    socket.emit('joinGame', { joinKey, nickname, playerId, authToken: myAuthToken });
 });
 
 // Game joined handler
@@ -587,10 +713,23 @@ socket.on('gameJoined', (data) => {
     currentPlayers = data.players || [];
     currentReadyPhase = !!data.readyPhase;
     gameIsStarted = !!data.isStarted;
+
+    if (data.authToken) {
+        myAuthToken = data.authToken;
+        try { sessionStorage.setItem('authToken', myAuthToken); } catch (e) {}
+    }
+
     if (data.isStarted) {
         gameModeDiv.style.display = 'block';
         const current = data.players.find(p => p.id === data.currentPlayerId);
-        if (current) currentTurnSpan.textContent = `${current.nickname}'s turn`;
+        if (current) {
+            currentTurnSpan.innerHTML = '';
+            const h = getHeraldry(current.id, current.nickname);
+            currentTurnSpan.appendChild(createHeraldryBadge(h));
+            currentTurnSpan.appendChild(document.createTextNode(` ${current.nickname}'s turn`));
+        } else {
+            currentTurnSpan.textContent = 'Waiting...';
+        }
         currentTurnPlayerId = data.currentPlayerId || null;
         // Reset play UI state on (re)join
         actionArea.style.display = 'none';
@@ -603,7 +742,7 @@ socket.on('gameJoined', (data) => {
         // Safety net for hand on join/reconnect to active game
         setTimeout(() => {
             if (currentHand.length === 0) {
-                socket.emit('getMyHand', { playerId });
+                socket.emit('getMyHand', { playerId, authToken: myAuthToken });
             }
         }, 400);
     } else {
