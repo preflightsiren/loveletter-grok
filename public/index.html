@@ -243,6 +243,47 @@
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
         }
 
+        .invite-share {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+            max-width: 280px;
+        }
+
+        .invite-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            width: 100%;
+        }
+
+        #inviteUrl {
+            flex: 1;
+            min-width: 0;
+            font-family: monospace;
+            font-size: 0.72rem;
+            letter-spacing: 0;
+            padding: 5px 7px;
+            margin: 0;
+            color: var(--burgundy);
+            background: linear-gradient(180deg, #fffef5 0%, #f4e9d1 100%);
+            border: 2px solid var(--ink-light);
+        }
+
+        #copyInvite {
+            flex-shrink: 0;
+            padding: 5px 10px;
+            font-size: 0.78rem;
+            margin: 0;
+            white-space: nowrap;
+        }
+
+        #copyInvite.copied {
+            background: linear-gradient(180deg, #d4af37 0%, #b38b4d 100%);
+            color: #2c2115;
+        }
+
         .players {
             background: #fffef5;
             border: 2px solid var(--ink-light);
@@ -746,7 +787,13 @@
         <div class="game-panel">
             <div class="game-header">
                 <div><strong>Love Letter</strong> — Court Intrigue</div>
-                <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e; word-break: break-all; max-width: 220px; text-align: right;">Join Key: —</div>
+                <div class="invite-share" id="inviteShare">
+                    <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e; word-break: break-all; max-width: 280px; text-align: right;">Join Key: —</div>
+                    <div class="invite-row">
+                        <input type="text" id="inviteUrl" readonly aria-label="Invite link" placeholder="Invite link appears here" value="">
+                        <button type="button" id="copyInvite" title="Copy the full invite URL">Copy invite link</button>
+                    </div>
+                </div>
             </div>
 
             <div class="players">
