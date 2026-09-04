@@ -57,3 +57,12 @@
 - **Screenshots**: Runtime screenshots (before/after captures) are kept untracked / out of the repo to avoid binary bloat.
 - **Rationale for icons**: Unicode emoji chosen as a lightweight, immediately recognizable stand-in for full card art. Maintains readability across platforms while evoking the right flavor (shields, swords, crowns, scrolls).
 - **Future possibilities noted** (not implemented): Real card illustrations (SVG or external assets), hand fanning via CSS rotation, entrance animations, a dedicated game table background layer. Kept out of scope to preserve zero-dependency nature.
+
+## Invite deep links & share (2026-09)
+- Support `/?join=<joinKey>`: client prefills `#joinKeyInput` on load so a guest only needs a nickname. Hand-typed join still works; server continues to use `normalizeJoinKey` / memorable adj-noun codes.
+- After create / while in the table lobby, UI shows the join key plus a shareable invite URL (`origin + ?join=` + key) and a one-tap **Copy invite link** button that copies the full URL (not the bare code).
+
+## Minimal analytics (2026-09)
+- In-memory counters for process lifetime only. No PII. Exposed via `/metrics` and included on `/health`.
+- Fields: `roomsCreated`, `activeRooms` (≥1 player), `concurrentPlayers`, `peakConcurrentPlayers`, `uniquePlayersSeen`, `returningPlayers` (ids seen again this process). Game identity stays per-tab in `sessionStorage.playerId` (multi-tab testing). Returning-player metrics use a separate `visitorId` from `localStorage.loveletterVisitorId`, sent on `createGame` / `joinGame` / `reconnectGame`; server `trackPlayerSighting` prefers `visitorId` and falls back to `playerId`.
+

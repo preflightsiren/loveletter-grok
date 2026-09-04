@@ -10,18 +10,83 @@ const io = socketIo(server);
 // Serve static files from public directory
 app.use(express.static('public'));
 
-// Health check for Railway and monitoring
+// In-memory storage for games
+const games = new Map();
+
+// Minimal in-memory analytics (process lifetime; no PII)
+const metricsState = {
+    roomsCreated: 0,
+    peakConcurrentPlayers: 0,
+    seenPlayers: new Set(),       // unique visitorIds (or playerIds) observed this process
+    returningPlayerIds: new Set() // ids seen again after first sighting
+};
+
+function trackPlayerSighting(dataOrId) {
+    // Prefer stable visitorId (localStorage) for returning-player metrics; fall back to playerId.
+    let id = null;
+    if (dataOrId && typeof dataOrId === 'object') {
+        id = dataOrId.visitorId || dataOrId.playerId;
+    } else {
+        id = dataOrId;
+    }
+    if (!id || typeof id !== 'string') return;
+    if (metricsState.seenPlayers.has(id)) {
+        metricsState.returningPlayerIds.add(id);
+    } else {
+        metricsState.seenPlayers.add(id);
+    }
+}
+
+function countConcurrentPlayers() {
+    let n = 0;
+    for (const game of games.values()) {
+        n += (game.players && game.players.length) ? game.players.length : 0;
+    }
+    return n;
+}
+
+function countActiveRooms() {
+    let n = 0;
+    for (const game of games.values()) {
+        if (game.players && game.players.length >= 1) n += 1;
+    }
+    return n;
+}
+
+function bumpPeakConcurrent() {
+    const concurrent = countConcurrentPlayers();
+    if (concurrent > metricsState.peakConcurrentPlayers) {
+        metricsState.peakConcurrentPlayers = concurrent;
+    }
+}
+
+function buildMetricsPayload() {
+    return {
+        status: 'ok',
+        uptime: process.uptime(),
+        roomsCreated: metricsState.roomsCreated,
+        activeRooms: countActiveRooms(),
+        concurrentPlayers: countConcurrentPlayers(),
+        peakConcurrentPlayers: metricsState.peakConcurrentPlayers,
+        uniquePlayersSeen: metricsState.seenPlayers.size,
+        returningPlayers: metricsState.returningPlayerIds.size
+    };
+}
+
+// Health check for Railway and monitoring (includes lightweight metrics)
 app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'ok', uptime: process.uptime() });
+    res.status(200).json(buildMetricsPayload());
+});
+
+// Dedicated metrics JSON (same shape as /health extras)
+app.get('/metrics', (req, res) => {
+    res.status(200).json(buildMetricsPayload());
 });
 
 // Redirect game.html to index
 app.get('/game.html', (req, res) => {
     res.redirect('/');
 });
-
-// In-memory storage for games
-const games = new Map();
 
 // --- Memorable join code generator (human-friendly) ---
 const ADJECTIVES = [
@@ -110,6 +175,9 @@ socket.on('createGame', (data) => {
     game.authTokens.set(playerId, myToken);
 
     games.set(joinKey, game);
+    metricsState.roomsCreated += 1;
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
 
     socket.playerId = playerId;
     socket.join(joinKey);
@@ -178,6 +246,8 @@ socket.on('joinGame', (data) => {
         socket.playerId = playerId;
         socket.join(normalizedKey);
         socket.join(`${playerId}:${myToken}`);
+        trackPlayerSighting(data);
+        bumpPeakConcurrent();
         console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
         socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
         socket.to(normalizedKey).emit('playerJoined', { players: game.players });
@@ -216,6 +286,8 @@ socket.on('joinGame', (data) => {
     socket.playerId = playerId;
     socket.join(normalizedKey);
     socket.join(`${playerId}:${myToken}`);
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
     console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
         socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
         socket.to(normalizedKey).emit('playerJoined', { players: game.players });
@@ -332,6 +404,8 @@ socket.on('reconnectGame', (data) => {
         socket.join(playerId); // legacy fallback
     }
     game.lastActivity = Date.now();
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
     socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: token });
 
     // Send current hand on reconnect if game is active

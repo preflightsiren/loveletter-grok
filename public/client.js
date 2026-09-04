@@ -5,6 +5,13 @@ console.log('Socket created, connected:', socket.connected);
 // Per-tab player ID (sessionStorage isolates tabs/windows for multi-user testing)
 const playerId = sessionStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
 sessionStorage.setItem('playerId', playerId);
+// Stable visitor id for returning-player metrics only (does not affect game identity / multi-tab)
+let visitorId = null;
+try { visitorId = localStorage.getItem('loveletterVisitorId'); } catch (e) { visitorId = null; }
+if (!visitorId) {
+    visitorId = Math.random().toString(36).substr(2, 9);
+    try { localStorage.setItem('loveletterVisitorId', visitorId); } catch (e) {}
+}
 let myAuthToken = sessionStorage.getItem('authToken') || null;
 
 // Surface server 'error' emits (e.g. join rejected mid-round) in the UI
@@ -18,6 +25,78 @@ const createButton = document.getElementById('createGame');
 const joinKeyInput = document.getElementById('joinKeyInput');
 const joinButton = document.getElementById('joinGame');
 const errorDiv = document.getElementById('error');
+const inviteUrlInput = document.getElementById('inviteUrl');
+const copyInviteButton = document.getElementById('copyInvite');
+let currentJoinKey = '';
+
+
+function buildInviteUrl(joinKey) {
+    const key = (joinKey || '').trim();
+    if (!key) return '';
+    return `${window.location.origin}/?join=${encodeURIComponent(key)}`;
+}
+
+function updateInviteShare(joinKey) {
+    currentJoinKey = (joinKey || '').trim();
+    const joinKeyEl = document.getElementById('joinKey');
+    if (joinKeyEl) {
+        joinKeyEl.textContent = currentJoinKey ? ('Join Key: ' + currentJoinKey) : 'Join Key: —';
+    }
+    if (inviteUrlInput) {
+        inviteUrlInput.value = buildInviteUrl(currentJoinKey);
+    }
+    if (copyInviteButton) {
+        copyInviteButton.textContent = 'Copy invite link';
+        copyInviteButton.classList.remove('copied');
+    }
+}
+
+async function copyInviteLink() {
+    const url = buildInviteUrl(currentJoinKey) || (inviteUrlInput && inviteUrlInput.value) || '';
+    if (!url) {
+        showError('No invite link to copy yet');
+        return;
+    }
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(url);
+        } else if (inviteUrlInput) {
+            inviteUrlInput.focus();
+            inviteUrlInput.select();
+            document.execCommand('copy');
+        } else {
+            throw new Error('clipboard unavailable');
+        }
+        if (copyInviteButton) {
+            copyInviteButton.textContent = 'Copied!';
+            copyInviteButton.classList.add('copied');
+            setTimeout(() => {
+                if (copyInviteButton) {
+                    copyInviteButton.textContent = 'Copy invite link';
+                    copyInviteButton.classList.remove('copied');
+                }
+            }, 1600);
+        }
+    } catch (e) {
+        showError('Could not copy — select the invite link and copy manually');
+    }
+}
+
+// Deep link: /?join=<joinKey> prefills the join key so a guest only needs a nickname
+(function prefillJoinFromQuery() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const join = params.get('join');
+        if (join && joinKeyInput) {
+            joinKeyInput.value = join;
+            if (nicknameInput) nicknameInput.focus();
+        }
+    } catch (e) {}
+})();
+
+if (copyInviteButton) {
+    copyInviteButton.addEventListener('click', () => { copyInviteLink(); });
+}
 
 // Game page logic
 const playerList = document.getElementById('playerList');
@@ -239,7 +318,7 @@ socket.on('gameOver', (data) => {
     try { sessionStorage.removeItem('authToken'); } catch (e) {}
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
-    document.getElementById('joinKey').textContent = 'Join Key: ';
+    updateInviteShare('');
     gameModeDiv.style.display = 'none';
     actionArea.style.display = 'none';
     currentReadyPhase = false;
@@ -260,7 +339,7 @@ socket.on('gameEnded', (data) => {
     // Clear UI
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
-    document.getElementById('joinKey').textContent = 'Join Key: ';
+    updateInviteShare('');
     gameModeDiv.style.display = 'none';
     currentReadyPhase = false;
     gameIsStarted = false;
@@ -299,7 +378,7 @@ socket.on('kicked', (data) => {
     // Clear chat and players
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
-    document.getElementById('joinKey').textContent = 'Join Key: ';
+    updateInviteShare('');
     currentReadyPhase = false;
     gameIsStarted = false;
     currentPlayers = [];
@@ -327,7 +406,7 @@ document.getElementById('leaveGame').addEventListener('click', () => {
     // Clear chat and players
     chatMessages.innerHTML = '';
     playerList.innerHTML = '';
-    document.getElementById('joinKey').textContent = 'Join Key: ';
+    updateInviteShare('');
     currentReadyPhase = false;
     gameIsStarted = false;
     currentPlayers = [];
@@ -686,7 +765,7 @@ createButton.addEventListener('click', () => {
         showError('Nickname is required');
         return;
     }
-    socket.emit('createGame', { nickname, playerId });
+    socket.emit('createGame', { nickname, playerId, visitorId });
 });
 
 // Join game
@@ -697,7 +776,7 @@ joinButton.addEventListener('click', () => {
         showError('Nickname and join key are required');
         return;
     }
-    socket.emit('joinGame', { joinKey, nickname, playerId, authToken: myAuthToken });
+    socket.emit('joinGame', { joinKey, nickname, playerId, visitorId, authToken: myAuthToken });
 });
 
 // Game joined handler
@@ -705,10 +784,7 @@ socket.on('gameJoined', (data) => {
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('gameSection').style.display = 'block';
     console.log('Setting joinKey to', data.joinKey);
-    const joinKeyEl = document.getElementById('joinKey');
-    if (joinKeyEl) {
-        joinKeyEl.textContent = 'Join Key: ' + data.joinKey;
-    }
+    updateInviteShare(data.joinKey);
     updatePlayers(data.players || [], data.readyPlayers || [], data.currentPlayerId);
     currentPlayers = data.players || [];
     currentReadyPhase = !!data.readyPhase;
