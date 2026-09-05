@@ -251,6 +251,16 @@
             max-width: 280px;
         }
 
+        .invite-host-hint {
+            font-family: Georgia, 'Times New Roman', Times, serif;
+            font-size: 0.78rem;
+            color: var(--burgundy);
+            text-align: right;
+            line-height: 1.35;
+            letter-spacing: 0.01em;
+            max-width: 280px;
+        }
+
         .invite-row {
             display: flex;
             gap: 6px;
@@ -789,6 +799,7 @@
                 <div><strong>Love Letter</strong> — Court Intrigue</div>
                 <div class="invite-share" id="inviteShare">
                     <div id="joinKey" style="font-family:monospace; font-size:0.9rem; color:#5c2a1e; word-break: break-all; max-width: 280px; text-align: right;">Join Key: —</div>
+                    <div class="invite-host-hint">Send this link — guests only need a nickname</div>
                     <div class="invite-row">
                         <input type="text" id="inviteUrl" readonly aria-label="Invite link" placeholder="Invite link appears here" value="">
                         <button type="button" id="copyInvite" title="Copy the full invite URL">Copy invite link</button>
