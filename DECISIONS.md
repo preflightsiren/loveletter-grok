@@ -61,6 +61,7 @@
 ## Invite deep links & share (2026-09)
 - Support `/?join=<joinKey>`: client prefills `#joinKeyInput` on load so a guest only needs a nickname. Hand-typed join still works; server continues to use `normalizeJoinKey` / memorable adj-noun codes.
 - After create / while in the table lobby, UI shows the join key plus a shareable invite URL (`origin + ?join=` + key) and a one-tap **Copy invite link** button that copies the full URL (not the bare code).
+- Host hint (non-blocking polish): one line above the invite share row — “Send this link — guests only need a nickname” — parchment/medieval styling; button copy unchanged.
 
 ## Minimal analytics (2026-09)
 - In-memory counters for process lifetime only. No PII. Exposed via `/metrics` and included on `/health`.
