@@ -84,11 +84,7 @@
             position: relative;
         }
 
-        #gameSection {
-            width: 100%;
-            max-width: 720px;
-            margin-top: 4px;
-        }
+        /* #gameSection width set with .table-layout (portrait rails) */
 
         .container::before, .game-panel::before {
             content: '';
@@ -799,6 +795,149 @@
             background: linear-gradient(to right, transparent, #b38b4d, transparent);
             margin: 12px 0;
         }
+
+        /* Pixel portrait rails (Design sketch #4) */
+        .table-layout {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            max-width: 980px;
+        }
+
+        #gameSection {
+            width: 100%;
+            max-width: 980px;
+            margin-top: 4px;
+        }
+
+        .table-layout .game-panel {
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: 720px;
+        }
+
+        .portrait-rail {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            flex: 0 0 auto;
+            width: 96px;
+            padding: 8px 4px;
+            min-height: 80px;
+        }
+
+        .portrait-rail-left {
+            order: 0;
+        }
+
+        .table-layout .game-panel {
+            order: 1;
+        }
+
+        .portrait-rail-right {
+            order: 2;
+            position: sticky;
+            top: 16px;
+        }
+
+        .portrait-seat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .portrait-seat .portrait-frame {
+            display: block;
+            width: 64px;
+            height: 80px;
+            border: 2px solid var(--ink-light);
+            background: #fffef5;
+            box-shadow: 1px 2px 0 #1f170f, inset 0 0 0 1px rgba(197, 162, 95, 0.35);
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            object-fit: contain;
+            object-position: center bottom;
+        }
+
+        .portrait-seat .portrait-nick {
+            font-size: 0.68rem;
+            line-height: 1.15;
+            color: var(--gold-bright);
+            text-shadow: 0 1px 0 #1f170f;
+            max-width: 92px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .portrait-seat .bot-badge {
+            margin-left: 0;
+            margin-top: 1px;
+        }
+
+        .portrait-seat.is-local .portrait-nick {
+            color: var(--gold-bright);
+            font-weight: 700;
+        }
+
+        .portrait-seat.is-turn .portrait-frame {
+            width: 80px;
+            height: 100px;
+            border-color: var(--gold-bright);
+            box-shadow:
+                0 0 0 3px #d4af37,
+                0 0 0 5px rgba(240, 213, 138, 0.55),
+                2px 3px 0 #1f170f;
+            z-index: 2;
+        }
+
+        .portrait-seat.is-turn .portrait-nick {
+            color: #f0d58a;
+            font-weight: 700;
+        }
+
+        .portrait-seat.is-eliminated {
+            opacity: 0.45;
+            filter: grayscale(0.35);
+        }
+
+        .portrait-seat.is-protected .portrait-frame {
+            box-shadow: 0 0 0 2px #2e5a3c, 1px 2px 0 #1f170f;
+        }
+
+        .portrait-you-label {
+            font-size: 0.62rem;
+            letter-spacing: 0.12em;
+            color: var(--gold);
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+
+        @media (max-width: 820px) {
+            .table-layout {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            .portrait-rail-left,
+            .portrait-rail-right {
+                flex-direction: row;
+                flex-wrap: wrap;
+                width: 100%;
+                max-width: 720px;
+                justify-content: center;
+                position: static;
+            }
+            .portrait-rail-left { order: 0; }
+            .table-layout .game-panel { order: 1; width: 100%; max-width: 720px; }
+            .portrait-rail-right { order: 2; }
+        }
     </style>
 </head>
 <body>
@@ -821,7 +960,9 @@
 
     <!-- GAME -->
     <div id="gameSection" style="display:none;">
-        <div class="game-panel">
+        <div class="table-layout">
+            <aside id="portraitRailLeft" class="portrait-rail portrait-rail-left" aria-label="Other courtiers"></aside>
+            <div class="game-panel">
             <div class="game-header">
                 <div><strong>Love Letter</strong> — Court Intrigue</div>
                 <div class="invite-share" id="inviteShare">
@@ -875,6 +1016,8 @@
                     </div>
                 </div>
             </div>
+        </div>
+            <aside id="portraitRailRight" class="portrait-rail portrait-rail-right" aria-label="You"></aside>
         </div>
     </div>
 

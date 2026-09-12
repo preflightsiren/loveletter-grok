@@ -70,7 +70,7 @@
 
 ## Optional bot opponents (2026-09)
 - Host (table creator) can add AI courtiers from the pre-start lobby: **Add a courtier** (one seat) or **Fill empty chairs** (remaining seats up to 6). Bots cannot be added after the match starts.
-- Bot player objects in every list payload (`gameJoined`, `playerJoined`, `playerLeft`, `readyUpdate`) include `isBot: true` and `avatarId` (`bot-1` … `bot-5`) as a roster key for Design portraits. Humans are `isBot: false` and have no `avatarId`. No art assets shipped.
+- Bot player objects in every list payload (`gameJoined`, `playerJoined`, `playerLeft`, `readyUpdate`) include `isBot: true` and `avatarId` (`bot-1` … `bot-5`). Humans are `isBot: false` with stable `avatarId` (`human-default` until heraldry picker). Portrait PNGs live in `public/avatars/`.
 - Courtly default nicknames (e.g. “Sir Pixel the Guard”). Design owns BOT chip / portrait polish; client shows a minimal `BOT` badge from `isBot`.
 - Bots have no socket. Server auto-readies them when the ready phase starts (or when seated during ready). If that completes the table, the match auto-starts.
 - On a bot’s turn the server waits 800–1500ms then plays through the same `tryPlayCard` path as humans (same public events). Heuristic is rules-legal and simple: Countess force, prefer Guard + common guess, Handmaid when holding Princess / as a safe play, King/Prince/Baron only vs unprotected targets when sensible, never target Handmaid-protected, targeting cards may fizzle with no valid target.
@@ -80,3 +80,11 @@
 - North-star fields on `/health` and `/metrics` must not count bots: `concurrentPlayers`, `peakConcurrentPlayers`, `uniquePlayersSeen`, `returningPlayers`, `activeRooms` (≥1 **human**). `roomsCreated` still counts human-hosted rooms.
 - Bot seats never call `trackPlayerSighting` (no bot visitorIds).
 - `botsInPlay` is a debug-only current bot-seat count across tables; not an adoption counter.
+
+## Pixel portrait panels (2026-09)
+- Design sketch #4: left rail = other seats (stacked); current turner largest + gold ring, sorted to front. Right rail = local player (fixed “You”).
+- Art: Design PNGs in `public/avatars/` (`bot-1`…`bot-5`, `human-default`), 64×80, CSS `image-rendering: pixelated`.
+- Resolve via `avatarId`: bots `/avatars/bot-N.png`; humans `human-{heraldryIndex}` when present else `human-default` (img onerror falls back to `human-default.png`). Heraldry picker not required for this slice.
+- Server assigns humans a stable `avatarId` (`human-default`) on create/join/reconnect if missing; bots keep `bot-1`…`bot-5`.
+- BOT chip remains under the nick on the left rail (`isBot`). Player list heraldry shields unchanged.
+- `.gitignore` still ignores `*.png` globally; `public/avatars/*.png` is force-included.

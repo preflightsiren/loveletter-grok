@@ -167,6 +167,27 @@ function nextBotNickname(game) {
     return `Court Bot ${(game.players || []).filter(p => p.isBot).length + 1}`;
 }
 
+function ensureHumanAvatarId(player, seatIndex) {
+    if (!player || player.isBot) return player;
+    if (!player.avatarId) {
+        // Stable default until heraldry picker ships human-{n} art
+        player.avatarId = 'human-default';
+    }
+    return player;
+}
+
+function ensureGameAvatarIds(game) {
+    (game.players || []).forEach((p, seatIndex) => {
+        if (!p) return;
+        if (p.isBot) {
+            if (!p.avatarId) p.avatarId = nextBotAvatarId(game);
+        } else {
+            ensureHumanAvatarId(p, seatIndex);
+        }
+    });
+}
+
+
 function humanCount(game) {
     return (game.players || []).filter(isHumanPlayer).length;
 }
@@ -326,7 +347,7 @@ socket.on('createGame', (data) => {
     const joinKey = normalizeJoinKey(prettyKey);
         const game = {
             joinKey: prettyKey,   // store pretty version for display
-            players: [{ id: playerId, nickname: nickname.trim(), isBot: false }],
+            players: [{ id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' }],
             chat: [],
             lastActivity: Date.now(),
             kickCounts: new Map(),
@@ -403,6 +424,7 @@ socket.on('joinGame', (data) => {
             }
         }
 
+        ensureHumanAvatarId(existingPlayer);
         // Update nickname if changed and not taken by others
         const trimmedNick = nickname.trim();
         if (existingPlayer.nickname !== trimmedNick) {
@@ -448,7 +470,7 @@ socket.on('joinGame', (data) => {
         return;
     }
 
-    const player = { id: playerId, nickname: nickname.trim(), isBot: false };
+    const player = { id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' };
     game.players.push(player);
     game.lastActivity = Date.now();
 
@@ -617,6 +639,7 @@ socket.on('reconnectGame', (data) => {
         socket.join(playerId); // legacy fallback
     }
     game.lastActivity = Date.now();
+    ensureGameAvatarIds(game);
     trackPlayerSighting(data);
     bumpPeakConcurrent();
     socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: token });
