@@ -7,6 +7,7 @@ Multiplayer web version of the classic Love Letter card game. Built with Node.js
 - Memorable join codes (e.g. `ancient-rose`)
 - Full Love Letter rules with proper card effects
 - Chat, ready system, kicking, reconnect support
+- Optional AI courtiers (host can add / fill empty chairs; `isBot` + `avatarId` on players)
 - All state managed server-side
 
 ## Run Locally

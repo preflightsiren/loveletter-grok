@@ -65,5 +65,18 @@
 
 ## Minimal analytics (2026-09)
 - In-memory counters for process lifetime only. No PII. Exposed via `/metrics` and included on `/health`.
-- Fields: `roomsCreated`, `activeRooms` (≥1 player), `concurrentPlayers`, `peakConcurrentPlayers`, `uniquePlayersSeen`, `returningPlayers` (ids seen again this process). Game identity stays per-tab in `sessionStorage.playerId` (multi-tab testing). Returning-player metrics use a separate `visitorId` from `localStorage.loveletterVisitorId`, sent on `createGame` / `joinGame` / `reconnectGame`; server `trackPlayerSighting` prefers `visitorId` and falls back to `playerId`.
+- Fields: `roomsCreated`, `activeRooms` (≥1 **human**), `concurrentPlayers`, `peakConcurrentPlayers`, `uniquePlayersSeen`, `returningPlayers` (ids seen again this process). Game identity stays per-tab in `sessionStorage.playerId` (multi-tab testing). Returning-player metrics use a separate `visitorId` from `localStorage.loveletterVisitorId`, sent on `createGame` / `joinGame` / `reconnectGame`; server `trackPlayerSighting` prefers `visitorId` and falls back to `playerId`. Bots are excluded from these north-star fields (see below).
 
+
+## Optional bot opponents (2026-09)
+- Host (table creator) can add AI courtiers from the pre-start lobby: **Add a courtier** (one seat) or **Fill empty chairs** (remaining seats up to 6). Bots cannot be added after the match starts.
+- Bot player objects in every list payload (`gameJoined`, `playerJoined`, `playerLeft`, `readyUpdate`) include `isBot: true` and `avatarId` (`bot-1` … `bot-5`) as a roster key for Design portraits. Humans are `isBot: false` and have no `avatarId`. No art assets shipped.
+- Courtly default nicknames (e.g. “Sir Pixel the Guard”). Design owns BOT chip / portrait polish; client shows a minimal `BOT` badge from `isBot`.
+- Bots have no socket. Server auto-readies them when the ready phase starts (or when seated during ready). If that completes the table, the match auto-starts.
+- On a bot’s turn the server waits 800–1500ms then plays through the same `tryPlayCard` path as humans (same public events). Heuristic is rules-legal and simple: Countess force, prefer Guard + common guess, Handmaid when holding Princess / as a safe play, King/Prince/Baron only vs unprotected targets when sensible, never target Handmaid-protected, targeting cards may fizzle with no valid target.
+- Reconnect/leave: bots do not disconnect. If no humans remain, the table ends. Creator leave before start still ends the game.
+
+## Metrics: humans only (2026-09)
+- North-star fields on `/health` and `/metrics` must not count bots: `concurrentPlayers`, `peakConcurrentPlayers`, `uniquePlayersSeen`, `returningPlayers`, `activeRooms` (≥1 **human**). `roomsCreated` still counts human-hosted rooms.
+- Bot seats never call `trackPlayerSighting` (no bot visitorIds).
+- `botsInPlay` is a debug-only current bot-seat count across tables; not an adoption counter.

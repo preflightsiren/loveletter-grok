@@ -105,6 +105,8 @@ const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendMessage');
 const startReadyButton = document.getElementById('startReady');
 const toggleReadyButton = document.getElementById('toggleReady');
+const addBotButton = document.getElementById('addBot');
+const fillBotsButton = document.getElementById('fillBots');
 const readyStatusDiv = document.getElementById('readyStatus');
 const gameModeDiv = document.getElementById('gameMode');
 const handContainer = document.getElementById('handContainer');
@@ -350,6 +352,17 @@ startReadyButton.addEventListener('click', () => {
     socket.emit('startReady', { playerId, authToken: myAuthToken });
 });
 
+if (addBotButton) {
+    addBotButton.addEventListener('click', () => {
+        socket.emit('addBot', { playerId, authToken: myAuthToken });
+    });
+}
+if (fillBotsButton) {
+    fillBotsButton.addEventListener('click', () => {
+        socket.emit('fillBots', { playerId, authToken: myAuthToken });
+    });
+}
+
 toggleReadyButton.addEventListener('click', () => {
     socket.emit('toggleReady', { playerId, authToken: myAuthToken });
     toggleReadyButton.textContent = toggleReadyButton.textContent === 'Ready' ? 'Unready' : 'Ready';
@@ -423,11 +436,21 @@ function sendMessage() {
 function updateStartReadyButton(players, readyPhase, isStarted) {
     const isCreator = players && players.length > 0 && players[0] && players[0].id === playerId;
     if (isCreator && !isStarted && !readyPhase && players.length >= 2) {
-        startReadyButton.style.display = 'block';
+        startReadyButton.style.display = 'inline-block';
         startReadyButton.textContent = 'Start Ready Phase';
     } else {
         startReadyButton.style.display = 'none';
     }
+    updateBotControls(players, isStarted);
+}
+
+function updateBotControls(players, isStarted) {
+    if (!addBotButton || !fillBotsButton) return;
+    const list = players || currentPlayers || [];
+    const isCreator = list.length > 0 && list[0] && list[0].id === playerId;
+    const canAdd = isCreator && !isStarted && list.length < 6;
+    addBotButton.style.display = canAdd ? 'inline-block' : 'none';
+    fillBotsButton.style.display = canAdd ? 'inline-block' : 'none';
 }
 
 function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
@@ -461,9 +484,21 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
         const heraldry = getHeraldry(player.id, player.nickname);
         li.appendChild(createHeraldryBadge(heraldry));
 
+        li.dataset.playerId = player.id;
+        li.dataset.isBot = player.isBot ? 'true' : 'false';
+        if (player.avatarId) li.dataset.avatarId = player.avatarId;
+
         const nameSpan = document.createElement('span');
         nameSpan.textContent = player.nickname;
         li.appendChild(nameSpan);
+
+        if (player.isBot) {
+            const botBadge = document.createElement('span');
+            botBadge.className = 'bot-badge';
+            botBadge.textContent = 'BOT';
+            botBadge.title = 'AI courtier';
+            li.appendChild(botBadge);
+        }
 
         const tokenSpan = document.createElement('span');
         tokenSpan.style.marginLeft = 'auto';
