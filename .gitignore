@@ -4,3 +4,5 @@ server.log
 *.png
 .env
 .env.*
+!public/avatars/
+!public/avatars/*.png

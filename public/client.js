@@ -100,6 +100,8 @@ if (copyInviteButton) {
 
 // Game page logic
 const playerList = document.getElementById('playerList');
+const portraitRailLeft = document.getElementById('portraitRailLeft');
+const portraitRailRight = document.getElementById('portraitRailRight');
 const chatMessages = document.getElementById('chatMessages');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendMessage');
@@ -456,6 +458,7 @@ function updateBotControls(players, isStarted) {
 function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
     if (!players || !Array.isArray(players)) return;
     currentPlayers = players;
+    if (currentPlayerId == null) currentPlayerId = currentTurnPlayerId;
     playerList.innerHTML = '';
     const isCreator = players.length > 0 && players[0].id === playerId;
 
@@ -527,6 +530,7 @@ function updatePlayers(players, readyPlayers = [], currentPlayerId = null) {
         playerList.appendChild(li);
     });
 
+    updatePortraitRails(players, currentPlayerId);
     updateStartReadyButton(players, currentReadyPhase, gameIsStarted);
 }
 
@@ -540,6 +544,101 @@ function addMessage(message) {
 function showError(message) {
     errorDiv.textContent = message;
     setTimeout(() => errorDiv.textContent = '', 5000);
+}
+
+
+/* === Pixel portrait rails (Design sketch #4) === */
+function resolveAvatarSrc(player) {
+    const id = (player && player.avatarId) || 'human-default';
+    if (/^bot-[1-5]$/.test(id)) return `/avatars/${id}.png`;
+    // Prefer human-{heraldryIndex} when Design ships those files; fall back via onerror
+    if (/^human-/.test(id)) return `/avatars/${id}.png`;
+    return '/avatars/human-default.png';
+}
+
+function createPortraitSeat(player, opts = {}) {
+    const seat = document.createElement('div');
+    seat.className = 'portrait-seat';
+    seat.dataset.playerId = player.id;
+    if (player.isBot) seat.dataset.isBot = 'true';
+    if (opts.isLocal) seat.classList.add('is-local');
+    if (opts.isTurn) seat.classList.add('is-turn');
+    if (opts.isEliminated) seat.classList.add('is-eliminated');
+    if (opts.isProtected) seat.classList.add('is-protected');
+
+    if (opts.showYouLabel) {
+        const you = document.createElement('div');
+        you.className = 'portrait-you-label';
+        you.textContent = 'You';
+        seat.appendChild(you);
+    }
+
+    const img = document.createElement('img');
+    img.className = 'portrait-frame';
+    img.width = opts.isTurn ? 80 : 64;
+    img.height = opts.isTurn ? 100 : 80;
+    img.alt = player.nickname || 'Portrait';
+    img.src = resolveAvatarSrc(player);
+    img.decoding = 'async';
+    img.addEventListener('error', function onAvErr() {
+        img.removeEventListener('error', onAvErr);
+        if (!img.src.endsWith('/avatars/human-default.png')) {
+            img.src = '/avatars/human-default.png';
+        }
+    });
+    seat.appendChild(img);
+
+    const nick = document.createElement('div');
+    nick.className = 'portrait-nick';
+    nick.textContent = player.nickname || '—';
+    nick.title = player.nickname || '';
+    seat.appendChild(nick);
+
+    if (player.isBot) {
+        const botBadge = document.createElement('span');
+        botBadge.className = 'bot-badge';
+        botBadge.textContent = 'BOT';
+        botBadge.title = 'AI courtier';
+        seat.appendChild(botBadge);
+    }
+
+    return seat;
+}
+
+function updatePortraitRails(players, currentPlayerId = null) {
+    if (!portraitRailLeft || !portraitRailRight) return;
+    const list = Array.isArray(players) ? players : [];
+    portraitRailLeft.innerHTML = '';
+    portraitRailRight.innerHTML = '';
+
+    const me = list.find(p => p && p.id === playerId) || null;
+    const others = list.filter(p => p && p.id !== playerId);
+
+    // Left rail: other seats; current turner first (front) + gold ring / larger
+    others.sort((a, b) => {
+        const aTurn = a.id === currentPlayerId ? 0 : 1;
+        const bTurn = b.id === currentPlayerId ? 0 : 1;
+        if (aTurn !== bTurn) return aTurn - bTurn;
+        return 0;
+    });
+
+    others.forEach(p => {
+        portraitRailLeft.appendChild(createPortraitSeat(p, {
+            isTurn: p.id === currentPlayerId,
+            isEliminated: eliminatedPlayers.has(p.id),
+            isProtected: protectedPlayers.has(p.id)
+        }));
+    });
+
+    if (me) {
+        portraitRailRight.appendChild(createPortraitSeat(me, {
+            isLocal: true,
+            showYouLabel: true,
+            isTurn: me.id === currentPlayerId,
+            isEliminated: eliminatedPlayers.has(me.id),
+            isProtected: protectedPlayers.has(me.id)
+        }));
+    }
 }
 
 /* === Simplified British Heraldry (deterministic per player) === */
