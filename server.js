@@ -37,18 +37,33 @@ function trackPlayerSighting(dataOrId) {
     }
 }
 
+function isHumanPlayer(p) {
+    return !!(p && !p.isBot);
+}
+
 function countConcurrentPlayers() {
+    // Humans only — bots must not inflate adoption / concurrency.
     let n = 0;
     for (const game of games.values()) {
-        n += (game.players && game.players.length) ? game.players.length : 0;
+        n += (game.players || []).filter(isHumanPlayer).length;
     }
     return n;
 }
 
 function countActiveRooms() {
+    // A room counts as active only if at least one human is seated.
     let n = 0;
     for (const game of games.values()) {
-        if (game.players && game.players.length >= 1) n += 1;
+        if ((game.players || []).some(isHumanPlayer)) n += 1;
+    }
+    return n;
+}
+
+function countBotsInPlay() {
+    // Debug-only seat count; not a north-star adoption field.
+    let n = 0;
+    for (const game of games.values()) {
+        n += (game.players || []).filter(p => p && p.isBot).length;
     }
     return n;
 }
@@ -69,7 +84,8 @@ function buildMetricsPayload() {
         concurrentPlayers: countConcurrentPlayers(),
         peakConcurrentPlayers: metricsState.peakConcurrentPlayers,
         uniquePlayersSeen: metricsState.seenPlayers.size,
-        returningPlayers: metricsState.returningPlayerIds.size
+        returningPlayers: metricsState.returningPlayerIds.size,
+        botsInPlay: countBotsInPlay()
     };
 }
 
@@ -123,6 +139,159 @@ function normalizeJoinKey(raw) {
   return raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+const MAX_PLAYERS = 6;
+
+// Courtly default nicknames (Design will polish BOT chip / portraits).
+const BOT_NICKNAMES = [
+    'Sir Pixel the Guard',
+    'Courier of the Rose',
+    'The Whisperer',
+    'Lady Quill',
+    'Court Jester'
+];
+
+function nextBotAvatarId(game) {
+    const used = new Set((game.players || []).map(p => p.avatarId).filter(Boolean));
+    for (let i = 1; i <= 5; i++) {
+        const id = `bot-${i}`;
+        if (!used.has(id)) return id;
+    }
+    return `bot-${(game.players || []).filter(p => p.isBot).length + 1}`;
+}
+
+function nextBotNickname(game) {
+    const used = new Set((game.players || []).map(p => p.nickname));
+    for (const name of BOT_NICKNAMES) {
+        if (!used.has(name)) return name;
+    }
+    return `Court Bot ${(game.players || []).filter(p => p.isBot).length + 1}`;
+}
+
+function humanCount(game) {
+    return (game.players || []).filter(isHumanPlayer).length;
+}
+
+function clearBotTimer(game) {
+    if (game && game.botTurnTimer) {
+        clearTimeout(game.botTurnTimer);
+        game.botTurnTimer = null;
+    }
+}
+
+// Simple rules-legal heuristic (not ML). Never targets Handmaid-protected players.
+const GUARD_GUESSES_COMMON = ['Priest', 'Baron', 'Handmaid', 'Prince'];
+const GUARD_GUESSES_RARE = ['Princess', 'Countess', 'King'];
+
+function chooseGuardGuess() {
+    if (Math.random() < 0.65) {
+        return GUARD_GUESSES_COMMON[Math.floor(Math.random() * GUARD_GUESSES_COMMON.length)];
+    }
+    return GUARD_GUESSES_RARE[Math.floor(Math.random() * GUARD_GUESSES_RARE.length)];
+}
+
+function getValidTargets(game, actorId, cardName) {
+    const allowsSelf = cardName === 'Prince';
+    return (game.players || []).filter(p => {
+        if (game.eliminated && game.eliminated.has(p.id)) return false;
+        if (game.protected && game.protected.has(p.id)) return false;
+        if (p.id === actorId && !allowsSelf) return false;
+        return true;
+    });
+}
+
+function chooseBotPlay(game, actorId) {
+    const hand = (game.hands && game.hands.get(actorId)) || [];
+    if (hand.length === 0) return null;
+
+    const hasCountess = hand.some(c => c.name === 'Countess');
+    const hasRoyal = hand.some(c => c.name === 'King' || c.name === 'Prince');
+    if (hasCountess && hasRoyal) {
+        return { cardIndex: hand.findIndex(c => c.name === 'Countess'), targetPlayerId: null, guess: null };
+    }
+
+    const names = hand.map(c => c.name);
+    const pickIndex = (name) => hand.findIndex(c => c.name === name);
+    const pickTarget = (cardName) => {
+        const targets = getValidTargets(game, actorId, cardName);
+        if (targets.length === 0) return null;
+        const opponents = targets.filter(p => p.id !== actorId);
+        const pool = opponents.length ? opponents : targets;
+        return pool[Math.floor(Math.random() * pool.length)];
+    };
+
+    // Prefer Guard with a common guess when a legal target exists.
+    if (names.includes('Guard')) {
+        const target = pickTarget('Guard');
+        if (target) {
+            return { cardIndex: pickIndex('Guard'), targetPlayerId: target.id, guess: chooseGuardGuess() };
+        }
+    }
+
+    // Handmaid when threatened (holding Princess) or as a safe low-risk play.
+    if (names.includes('Handmaid')) {
+        return { cardIndex: pickIndex('Handmaid'), targetPlayerId: null, guess: null };
+    }
+
+    if (names.includes('Priest')) {
+        const target = pickTarget('Priest');
+        if (target) {
+            return { cardIndex: pickIndex('Priest'), targetPlayerId: target.id, guess: null };
+        }
+    }
+
+    // Baron / King / Prince only with valid unprotected targets when sensible.
+    if (names.includes('Baron')) {
+        const other = hand.find(c => c.name !== 'Baron');
+        const target = pickTarget('Baron');
+        if (target && other && other.value >= 4) {
+            return { cardIndex: pickIndex('Baron'), targetPlayerId: target.id, guess: null };
+        }
+    }
+
+    if (names.includes('Prince')) {
+        const target = pickTarget('Prince');
+        if (target && target.id !== actorId) {
+            return { cardIndex: pickIndex('Prince'), targetPlayerId: target.id, guess: null };
+        }
+    }
+
+    if (names.includes('King')) {
+        const other = hand.find(c => c.name !== 'King');
+        const target = pickTarget('King');
+        if (target && other && other.value <= 3) {
+            return { cardIndex: pickIndex('King'), targetPlayerId: target.id, guess: null };
+        }
+    }
+
+    if (names.includes('Countess')) {
+        return { cardIndex: pickIndex('Countess'), targetPlayerId: null, guess: null };
+    }
+
+    // Otherwise play the lowest-value non-Princess card (never volunteer the Princess).
+    let bestIdx = -1;
+    let bestVal = 99;
+    hand.forEach((c, i) => {
+        if (c.name === 'Princess') return;
+        if (c.value < bestVal) {
+            bestVal = c.value;
+            bestIdx = i;
+        }
+    });
+    if (bestIdx === -1) bestIdx = 0;
+
+    const card = hand[bestIdx];
+    const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(card.name);
+    let targetPlayerId = null;
+    let guess = null;
+    if (needsTarget) {
+        const target = pickTarget(card.name);
+        if (target) targetPlayerId = target.id;
+        if (card.name === 'Prince' && !targetPlayerId) targetPlayerId = actorId;
+        if (card.name === 'Guard' && targetPlayerId) guess = chooseGuardGuess();
+    }
+    return { cardIndex: bestIdx, targetPlayerId, guess };
+}
+
 function generateAuthToken() {
   // 128-bit-ish random, url-safe, short enough
   return uuidv4().replace(/-/g, '');
@@ -157,7 +326,7 @@ socket.on('createGame', (data) => {
     const joinKey = normalizeJoinKey(prettyKey);
         const game = {
             joinKey: prettyKey,   // store pretty version for display
-            players: [{ id: playerId, nickname: nickname.trim() }],
+            players: [{ id: playerId, nickname: nickname.trim(), isBot: false }],
             chat: [],
             lastActivity: Date.now(),
             kickCounts: new Map(),
@@ -215,6 +384,10 @@ socket.on('joinGame', (data) => {
     // Check if player already in game
     const existingPlayer = game.players.find(p => p.id === playerId);
     if (existingPlayer) {
+        if (existingPlayer.isBot) {
+            socket.emit('error', 'Cannot join as a bot seat');
+            return;
+        }
         // SECURITY: for existing playerId, require the correct authToken if one is on file
         if (game.authTokens && game.authTokens.has(playerId)) {
             const expected = game.authTokens.get(playerId);
@@ -275,7 +448,7 @@ socket.on('joinGame', (data) => {
         return;
     }
 
-    const player = { id: playerId, nickname: nickname.trim() };
+    const player = { id: playerId, nickname: nickname.trim(), isBot: false };
     game.players.push(player);
     game.lastActivity = Date.now();
 
@@ -305,12 +478,45 @@ socket.on('joinGame', (data) => {
             }
             const index = game.players.findIndex(p => p.id === actorId);
             if (index !== -1) {
+                const leaving = game.players[index];
+                if (leaving && leaving.isBot) {
+                    break;
+                }
+                const wasCreator = index === 0;
+                const wasTurn = game.currentPlayerId === actorId;
                 game.players.splice(index, 1);
                 game.readyPlayers.delete(actorId);
                 game.lastActivity = Date.now();
                 socket.to(key).emit('playerLeft', { players: game.players });
+                if (endGameIfNoHumans(game, key, 'No human players remain')) {
+                    break;
+                }
+                if (wasCreator && !game.isStarted) {
+                    io.to(key).emit('gameEnded', { message: 'Creator left the game' });
+                    clearBotTimer(game);
+                    games.delete(key);
+                    break;
+                }
+                if (game.isStarted && game.players.length < 2) {
+                    io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
+                    clearBotTimer(game);
+                    games.delete(key);
+                    break;
+                }
                 if (game.readyPhase) {
                     io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                }
+                if (game.isStarted && wasTurn && !game.roundOver) {
+                    const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
+                    if (active.length > 0) {
+                        game.currentPlayerId = active[0].id;
+                        if (game.deck && game.deck.length > 0) {
+                            drawForPlayer(game, key, game.currentPlayerId);
+                        } else {
+                            io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
+                            maybeScheduleBotTurn(game, key);
+                        }
+                    }
                 }
                 console.log(`Player ${actorId} left game: ${key}`);
                 break;
@@ -350,6 +556,9 @@ socket.on('joinGame', (data) => {
                         }
                     }
                     socket.to(key).emit('playerLeft', { players: game.players });
+                    if (endGameIfNoHumans(game, key, 'No human players remain')) {
+                        break;
+                    }
                     if (game.readyPhase) {
                         io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
                     }
@@ -382,6 +591,10 @@ socket.on('reconnectGame', (data) => {
     const player = game.players.find(p => p.id === playerId);
     if (!player) {
         socket.emit('error', 'Player not in game');
+        return;
+    }
+    if (player.isBot) {
+        socket.emit('error', 'Cannot reconnect as a bot seat');
         return;
     }
     // Validate token if we have one stored
@@ -455,10 +668,17 @@ socket.on('startReady', (data) => {
             game.readyPhase = true;
             game.readyPlayers.clear();
             game.readyPlayers.add(actorId);
+            game.players.forEach(p => {
+                if (p.isBot) game.readyPlayers.add(p.id);
+            });
             game.lastActivity = Date.now();
             io.to(key).emit('readyPhaseStarted');
             io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
             console.log(`Ready phase started for game: ${key}`);
+            if (game.readyPlayers.size === game.players.length && game.players.length >= 2) {
+                initializeGame(game, key);
+                console.log(`Game auto-started for ${key} (bots auto-ready)`);
+            }
             break;
         }
     }
@@ -492,6 +712,61 @@ socket.on('toggleReady', (data) => {
     }
 });
 
+// Host: add one AI courtier (lobby / pre-start only)
+socket.on('addBot', (data) => {
+    const actorId = socket.playerId || (data && data.playerId);
+    let found = false;
+    for (const [key, game] of games) {
+        if (!game.players.some(p => p.id === actorId)) continue;
+        found = true;
+        if (!verifyAuth(game, actorId, data && data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (!game.players[0] || game.players[0].id !== actorId) {
+            socket.emit('error', 'Only the host can add bots');
+            return;
+        }
+        const result = addBotToGame(game, key);
+        if (!result.ok) socket.emit('error', result.error);
+        return;
+    }
+    if (!found) socket.emit('error', 'Game not found');
+});
+
+// Host: fill remaining chairs with bots (up to 6)
+socket.on('fillBots', (data) => {
+    const actorId = socket.playerId || (data && data.playerId);
+    let found = false;
+    for (const [key, game] of games) {
+        if (!game.players.some(p => p.id === actorId)) continue;
+        found = true;
+        if (!verifyAuth(game, actorId, data && data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (!game.players[0] || game.players[0].id !== actorId) {
+            socket.emit('error', 'Only the host can add bots');
+            return;
+        }
+        if (game.isStarted) {
+            socket.emit('error', 'Cannot add bots after the match has started');
+            return;
+        }
+        let added = 0;
+        while (game.players.length < MAX_PLAYERS) {
+            const result = addBotToGame(game, key);
+            if (!result.ok) break;
+            added += 1;
+        }
+        if (added === 0 && game.players.length >= MAX_PLAYERS) {
+            socket.emit('error', 'Game is full');
+        }
+        return;
+    }
+    if (!found) socket.emit('error', 'Game not found');
+});
+
 // Play a card (core game action)
 socket.on('playCard', (data) => {
     // SECURITY: Use the playerId that was established when this socket joined the game.
@@ -510,89 +785,10 @@ socket.on('playCard', (data) => {
         const pIdx = game.players.findIndex(pp => pp.id === actorId);
         if (pIdx === -1) continue;
 
-        if (game.currentPlayerId !== actorId) {
-            // Not your turn
-            socket.emit('error', 'Not your turn');
-            break;
+        const result = tryPlayCard(game, key, actorId, cardIndex, targetPlayerId, guess);
+        if (!result.ok) {
+            socket.emit('error', result.error);
         }
-        if (game.eliminated.has(actorId)) {
-            socket.emit('error', 'You are out of this round');
-            break;
-        }
-
-        const hand = game.hands.get(actorId) || [];
-        if (cardIndex < 0 || cardIndex >= hand.length) {
-            socket.emit('error', 'Invalid card selection');
-            break;
-        }
-
-        const cardToPlay = hand[cardIndex];
-
-        // Countess rule enforcement: if holding Countess + (King or Prince), must play Countess
-        const hasCountess = hand.some(c => c.name === 'Countess');
-        const hasRoyal = hand.some(c => c.name === 'King' || c.name === 'Prince');
-        if (hasCountess && hasRoyal && cardToPlay.name !== 'Countess') {
-            socket.emit('error', 'You must play the Countess when holding it with King or Prince');
-            break;
-        }
-
-        // Validate target for cards that require one
-        const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(cardToPlay.name);
-        const allowsSelf = cardToPlay.name === 'Prince';
-
-        if (needsTarget && targetPlayerId) {
-            // Only validate if a target was actually chosen.
-            // If no target (all others protected/eliminated), we allow the play — effect will fizzle.
-            if (targetPlayerId === actorId && !allowsSelf) {
-                socket.emit('error', 'This card requires a different target player');
-                break;
-            }
-            const target = game.players.find(pp => pp.id === targetPlayerId);
-            if (!target || game.eliminated.has(targetPlayerId) || game.protected.has(targetPlayerId)) {
-                socket.emit('error', 'Invalid or protected target');
-                break;
-            }
-        }
-
-        if (cardToPlay.name === 'Guard' && guess === 'Guard') {
-            socket.emit('error', 'Cannot guess Guard');
-            break;
-        }
-
-        // All checks passed — perform the play
-        const playedCard = hand.splice(cardIndex, 1)[0];
-
-        // Record
-        if (!game.discards.has(actorId)) game.discards.set(actorId, []);
-        game.discards.get(actorId).push(playedCard);
-        game.lastPlayed.set(actorId, playedCard);
-        game.lastActivity = Date.now();
-
-        const actor = game.players[pIdx];
-
-        // Send updated hand to the player who just played (they now have one less card)
-        const updatedHand = game.hands.get(actorId) || [];
-        io.to(getPrivateRoom(game, actorId)).emit('privateHand', {
-            hand: updatedHand.map(c => ({ name: c.name, value: c.value }))
-        });
-
-        // Public announcement of the play
-        io.to(key).emit('cardPlayed', {
-            playerId: actorId,
-            nickname: actor.nickname,
-            card: { name: playedCard.name, value: playedCard.value },
-            targetPlayerId: targetPlayerId || null,
-            guess: guess || null
-        });
-
-        // Resolve effect (may eliminate, reveal, swap, etc.)
-        resolveCardEffect(game, key, actorId, playedCard, targetPlayerId, guess);
-
-        // If the player who just acted is still in and round not over, their turn ends
-        if (!game.roundOver) {
-            advanceToNextPlayer(game, key);
-        }
-
         break;
     }
 });
@@ -614,6 +810,175 @@ socket.on('getMyHand', (data) => {
         }
     }
 });
+
+function addBotToGame(game, key) {
+    if (game.isStarted) {
+        return { ok: false, error: 'Cannot add bots after the match has started' };
+    }
+    if (game.players.length >= MAX_PLAYERS) {
+        return { ok: false, error: 'Game is full' };
+    }
+    const bot = {
+        id: `bot-${uuidv4()}`,
+        nickname: nextBotNickname(game),
+        isBot: true,
+        avatarId: nextBotAvatarId(game)
+    };
+    game.players.push(bot);
+    game.lastActivity = Date.now();
+    // Do not trackPlayerSighting / bumpPeakConcurrent — bots are not visitors.
+    io.to(key).emit('playerJoined', { players: game.players });
+    io.to(key).emit('message', { message: `${bot.nickname} takes a seat at the table.` });
+    if (game.readyPhase && !game.isStarted) {
+        game.readyPlayers.add(bot.id);
+        io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+        if (game.readyPlayers.size === game.players.length && game.players.length >= 2) {
+            initializeGame(game, key);
+            console.log(`Game auto-started for ${key} (bots auto-ready)`);
+        }
+    }
+    console.log(`Bot ${bot.nickname} (${bot.avatarId}) added to ${key}`);
+    return { ok: true, bot };
+}
+
+function endGameIfNoHumans(game, key, message) {
+    if (humanCount(game) > 0) return false;
+    clearBotTimer(game);
+    io.to(key).emit('gameEnded', { message: message || 'No human players remain' });
+    games.delete(key);
+    console.log(`Game ${key} ended — no humans left`);
+    return true;
+}
+
+function maybeScheduleBotTurn(game, key) {
+    if (!game || !game.isStarted || game.roundOver) return;
+    const pid = game.currentPlayerId;
+    const player = game.players.find(p => p.id === pid);
+    if (!player || !player.isBot) return;
+    if (game.eliminated && game.eliminated.has(pid)) return;
+
+    clearBotTimer(game);
+    const delay = 800 + Math.floor(Math.random() * 701); // 800–1500ms
+    game.botTurnTimer = setTimeout(() => {
+        game.botTurnTimer = null;
+        if (!games.has(key) || !game.isStarted || game.roundOver) return;
+        if (game.currentPlayerId !== pid) return;
+        executeBotTurn(game, key, pid);
+    }, delay);
+}
+
+function executeBotTurn(game, key, actorId) {
+    const choice = chooseBotPlay(game, actorId);
+    if (!choice) {
+        console.log('Bot had no play', actorId);
+        return;
+    }
+    let result = tryPlayCard(game, key, actorId, choice.cardIndex, choice.targetPlayerId, choice.guess);
+    if (result.ok) return;
+
+    console.log('Bot play rejected, trying fallback:', result.error);
+    const hand = (game.hands && game.hands.get(actorId)) || [];
+    for (let i = 0; i < hand.length; i++) {
+        if (hand[i].name === 'Princess' && hand.length > 1) continue;
+        const card = hand[i];
+        const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(card.name);
+        let targetPlayerId = null;
+        let guess = null;
+        if (needsTarget) {
+            const targets = getValidTargets(game, actorId, card.name);
+            if (targets.length > 0) {
+                const opponents = targets.filter(p => p.id !== actorId);
+                const pool = opponents.length ? opponents : targets;
+                targetPlayerId = pool[Math.floor(Math.random() * pool.length)].id;
+            } else if (card.name === 'Prince') {
+                targetPlayerId = actorId;
+            }
+            if (card.name === 'Guard' && targetPlayerId) guess = chooseGuardGuess();
+        }
+        result = tryPlayCard(game, key, actorId, i, targetPlayerId, guess);
+        if (result.ok) return;
+    }
+    console.log('Bot fallback also failed for', actorId);
+}
+
+// Shared play path for humans (socket) and bots (scheduled). Emits the same public events.
+function tryPlayCard(game, key, actorId, cardIndex, targetPlayerId, guess) {
+    if (!game.isStarted || game.roundOver) {
+        return { ok: false, error: 'Round is not active' };
+    }
+    if (game.currentPlayerId !== actorId) {
+        return { ok: false, error: 'Not your turn' };
+    }
+    if (game.eliminated && game.eliminated.has(actorId)) {
+        return { ok: false, error: 'You are out of this round' };
+    }
+
+    const pIdx = game.players.findIndex(pp => pp.id === actorId);
+    if (pIdx === -1) {
+        return { ok: false, error: 'Player not in game' };
+    }
+
+    const hand = game.hands.get(actorId) || [];
+    if (cardIndex < 0 || cardIndex >= hand.length) {
+        return { ok: false, error: 'Invalid card selection' };
+    }
+
+    const cardToPlay = hand[cardIndex];
+
+    // Countess rule enforcement: if holding Countess + (King or Prince), must play Countess
+    const hasCountess = hand.some(c => c.name === 'Countess');
+    const hasRoyal = hand.some(c => c.name === 'King' || c.name === 'Prince');
+    if (hasCountess && hasRoyal && cardToPlay.name !== 'Countess') {
+        return { ok: false, error: 'You must play the Countess when holding it with King or Prince' };
+    }
+
+    const needsTarget = ['Guard', 'Priest', 'Baron', 'King', 'Prince'].includes(cardToPlay.name);
+    const allowsSelf = cardToPlay.name === 'Prince';
+
+    if (needsTarget && targetPlayerId) {
+        if (targetPlayerId === actorId && !allowsSelf) {
+            return { ok: false, error: 'This card requires a different target player' };
+        }
+        const target = game.players.find(pp => pp.id === targetPlayerId);
+        if (!target || game.eliminated.has(targetPlayerId) || game.protected.has(targetPlayerId)) {
+            return { ok: false, error: 'Invalid or protected target' };
+        }
+    }
+
+    if (cardToPlay.name === 'Guard' && guess === 'Guard') {
+        return { ok: false, error: 'Cannot guess Guard' };
+    }
+
+    const playedCard = hand.splice(cardIndex, 1)[0];
+
+    if (!game.discards.has(actorId)) game.discards.set(actorId, []);
+    game.discards.get(actorId).push(playedCard);
+    game.lastPlayed.set(actorId, playedCard);
+    game.lastActivity = Date.now();
+
+    const actor = game.players[pIdx];
+
+    const updatedHand = game.hands.get(actorId) || [];
+    io.to(getPrivateRoom(game, actorId)).emit('privateHand', {
+        hand: updatedHand.map(c => ({ name: c.name, value: c.value }))
+    });
+
+    io.to(key).emit('cardPlayed', {
+        playerId: actorId,
+        nickname: actor.nickname,
+        card: { name: playedCard.name, value: playedCard.value },
+        targetPlayerId: targetPlayerId || null,
+        guess: guess || null
+    });
+
+    resolveCardEffect(game, key, actorId, playedCard, targetPlayerId, guess);
+
+    if (!game.roundOver) {
+        advanceToNextPlayer(game, key);
+    }
+
+    return { ok: true };
+}
 
 // Card definitions (standard Love Letter)
 const CARD_DEFS = {
@@ -728,6 +1093,7 @@ function startNewRound(game, key, isFirstRound = false) {
     io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
 
     console.log(`Round ${game.roundNumber} started for ${key}, first player: ${game.currentPlayerId}`);
+    maybeScheduleBotTurn(game, key);
 }
 
 function drawForPlayer(game, key, playerId) {
@@ -766,6 +1132,7 @@ function drawForPlayer(game, key, playerId) {
     // But server will enforce on playCard
 
     io.to(key).emit('turnChanged', { currentPlayerId: playerId });
+    maybeScheduleBotTurn(game, key);
 }
 
 function advanceToNextPlayer(game, key) {
@@ -1085,7 +1452,11 @@ function endRound(game, key, deckEmpty = false) {
             finalTokens: Object.fromEntries(game.tokens)
         });
         // Optionally keep the game object for a bit or delete
-        setTimeout(() => games.delete(key), 30000);
+        setTimeout(() => {
+            const g = games.get(key);
+            if (g) clearBotTimer(g);
+            games.delete(key);
+        }, 30000);
         return;
     }
 
@@ -1105,6 +1476,10 @@ socket.on('disconnect', () => {
     for (const [key, game] of games) {
         const index = game.players.findIndex(p => p.id === socket.playerId);
         if (index !== -1) {
+            const seated = game.players[index];
+            if (seated && seated.isBot) {
+                continue;
+            }
             game.players.splice(index, 1);
             game.readyPlayers.delete(socket.playerId);
             game.eliminated && game.eliminated.delete(socket.playerId);
@@ -1112,17 +1487,23 @@ socket.on('disconnect', () => {
             game.hands && game.hands.delete(socket.playerId);
             game.lastActivity = Date.now();
             socket.to(key).emit('playerLeft', { players: game.players });
+            if (endGameIfNoHumans(game, key, 'No human players remain')) {
+                break;
+            }
             // If creator left
             if (index === 0) {
                 io.to(key).emit('gameEnded', { message: 'Creator left the game' });
+                clearBotTimer(game);
                 games.delete(key);
             } else if (game.players.length === 0) {
+                clearBotTimer(game);
                 games.delete(key);
             } else if (game.readyPhase) {
                 io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
             } else if (game.isStarted) {
                 if (game.players.length < 2) {
                     io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
+                    clearBotTimer(game);
                     games.delete(key);
                 } else {
                     // If it was their turn, advance
@@ -1135,6 +1516,8 @@ socket.on('disconnect', () => {
                             // draw for them if possible
                             if (!game.roundOver && game.deck && game.deck.length > 0) {
                                 drawForPlayer(game, key, game.currentPlayerId);
+                            } else {
+                                maybeScheduleBotTurn(game, key);
                             }
                         }
                     }

@@ -365,6 +365,33 @@
             color: #3d5a2e;
         }
 
+        .bot-badge {
+            font-size: 0.62rem;
+            letter-spacing: 0.08em;
+            color: var(--burgundy);
+            border: 1px solid var(--gold);
+            padding: 1px 5px;
+            margin-left: 5px;
+            border-radius: 2px;
+            background: #fffef5;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        #addBot, #fillBots {
+            width: auto;
+            padding: 8px 14px;
+            margin: 8px 4px 0 0;
+            display: none;
+            background: linear-gradient(180deg, #e8d9b5 0%, var(--parchment-dark) 100%);
+            color: var(--ink);
+            border-color: var(--ink-light);
+        }
+
+        #addBot:hover, #fillBots:hover {
+            background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 100%);
+        }
+
         .kick-btn {
             margin-left: auto;
             padding: 0 5px;
@@ -811,6 +838,8 @@
                 <h2>Players at the Table</h2>
                 <ul id="playerList"></ul>
                 <div style="margin-top:6px;">
+                    <button id="addBot" style="display:none;" type="button">Add a courtier</button>
+                    <button id="fillBots" style="display:none;" type="button">Fill empty chairs</button>
                     <button id="startReady" style="display:none;">Begin Ready Phase</button>
                     <button id="toggleReady" style="display:none;">Ready</button>
                     <div id="readyStatus" style="display:none;"></div>
