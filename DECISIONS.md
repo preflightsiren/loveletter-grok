@@ -74,6 +74,7 @@
 - Courtly default nicknames (e.g. “Sir Pixel the Guard”). Design owns BOT chip / portrait polish; client shows a minimal `BOT` badge from `isBot`.
 - Bots have no socket. Server auto-readies them when the ready phase starts (or when seated during ready). If that completes the table, the match auto-starts.
 - On a bot’s turn the server waits 800–1500ms then plays through the same `tryPlayCard` path as humans (same public events). Heuristic is rules-legal and simple: Countess force, prefer Guard + common guess, Handmaid when holding Princess / as a safe play, King/Prince/Baron only vs unprotected targets when sensible, never target Handmaid-protected, targeting cards may fizzle with no valid target.
+- Bot turn scheduling (hotfix 2026-09): game engine + `maybeScheduleBotTurn` live at module scope (not inside the Socket.IO connection handler). Every turn change goes through `emitTurnChanged` → `maybeScheduleBotTurn` so a bot seat never waits on a human socket. Reconnect re-arms the timer and syncs `currentPlayerId`; kick/leave/disconnect recovery also re-schedules. Failed bot plays retry once.
 - Reconnect/leave: bots do not disconnect. If no humans remain, the table ends. Creator leave before start still ends the game.
 
 ## Metrics: humans only (2026-09)
