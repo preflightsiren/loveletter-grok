@@ -332,508 +332,6 @@ function verifyAuth(game, playerId, providedToken) {
 }
 
 // Socket.IO connection handling
-io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
-
-// Create a new game
-socket.on('createGame', (data) => {
-    const { nickname, playerId } = data;
-    if (!nickname || nickname.trim() === '') {
-        socket.emit('error', 'Nickname is required');
-        return;
-    }
-
-    const prettyKey = generateMemorableCode();
-    const joinKey = normalizeJoinKey(prettyKey);
-        const game = {
-            joinKey: prettyKey,   // store pretty version for display
-            players: [{ id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' }],
-            chat: [],
-            lastActivity: Date.now(),
-            kickCounts: new Map(),
-            banned: new Set(),
-            readyPhase: false,
-            readyPlayers: new Set(),
-            isStarted: false,
-            deck: [],
-            hands: new Map(),
-            currentPlayerId: null,
-            burnedCard: null,
-            authTokens: new Map()  // playerId -> secret token
-        };
-    const myToken = generateAuthToken();
-    game.authTokens.set(playerId, myToken);
-
-    games.set(joinKey, game);
-    metricsState.roomsCreated += 1;
-    trackPlayerSighting(data);
-    bumpPeakConcurrent();
-
-    socket.playerId = playerId;
-    socket.join(joinKey);
-    socket.join(`${playerId}:${myToken}`); // private room using token (not guessable from playerId)
-    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', prettyKey);
-        socket.emit('gameJoined', { joinKey: prettyKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
-        console.log(`Game created: ${prettyKey} by ${nickname}`);
-});
-
-// Join an existing game
-socket.on('joinGame', (data) => {
-    const { joinKey, nickname, playerId } = data;
-    if (!nickname || nickname.trim() === '') {
-        socket.emit('error', 'Nickname is required');
-        return;
-    }
-
-    const normalizedKey = normalizeJoinKey(joinKey);
-    const game = games.get(normalizedKey);
-    if (!game) {
-        socket.emit('error', 'Game not found');
-        return;
-    }
-
-    if (game.banned.has(playerId)) {
-        socket.emit('error', 'You are banned from this game.');
-        return;
-    }
-
-    const displayKey = game.joinKey || normalizedKey;
-
-    // Ensure authTokens map exists (for old games)
-    if (!game.authTokens) game.authTokens = new Map();
-
-    // Check if player already in game
-    const existingPlayer = game.players.find(p => p.id === playerId);
-    if (existingPlayer) {
-        if (existingPlayer.isBot) {
-            socket.emit('error', 'Cannot join as a bot seat');
-            return;
-        }
-        // SECURITY: for existing playerId, require the correct authToken if one is on file
-        if (game.authTokens && game.authTokens.has(playerId)) {
-            const expected = game.authTokens.get(playerId);
-            const provided = data.authToken;
-            if (provided && provided !== expected) {
-                socket.emit('error', 'This player is already in the game with a different session.');
-                return;
-            }
-            if (!provided && expected) {
-                // No token provided but one exists: reject to prevent easy spoof from knowing only playerId
-                socket.emit('error', 'Valid session token required to rejoin as this player.');
-                return;
-            }
-        }
-
-        ensureHumanAvatarId(existingPlayer);
-        // Update nickname if changed and not taken by others
-        const trimmedNick = nickname.trim();
-        if (existingPlayer.nickname !== trimmedNick) {
-            if (game.players.some(p => p.id !== playerId && p.nickname === trimmedNick)) {
-                socket.emit('error', 'Nickname already taken');
-                return;
-            }
-            existingPlayer.nickname = trimmedNick;
-            game.lastActivity = Date.now();
-        }
-        const myToken = game.authTokens.get(playerId) || generateAuthToken();
-        game.authTokens.set(playerId, myToken);
-
-        socket.playerId = playerId;
-        socket.join(normalizedKey);
-        socket.join(`${playerId}:${myToken}`);
-        trackPlayerSighting(data);
-        bumpPeakConcurrent();
-        console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
-        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
-        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
-        console.log(`${trimmedNick} rejoined game: ${displayKey}`);
-        return;
-    }
-
-    // Per policy: disallow brand-new players from joining once a round has started.
-    // Reconnects for existing playerIds are allowed (handled in the block above).
-    // Joins are permitted again during the inter-round pause (roundOver) so the
-    // newcomer is included when startNewRound deals the next hands.
-    if (game.isStarted && !game.roundOver) {
-        socket.emit('error', 'Cannot join: a round is already in progress');
-        return;
-    }
-
-    if (game.players.length >= 6) {
-        socket.emit('error', 'Game is full');
-        return;
-    }
-
-    // Check for duplicate nickname
-    if (game.players.some(p => p.nickname === nickname.trim())) {
-        socket.emit('error', 'Nickname already taken');
-        return;
-    }
-
-    const player = { id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' };
-    game.players.push(player);
-    game.lastActivity = Date.now();
-
-    if (!game.authTokens) game.authTokens = new Map();
-    const myToken = generateAuthToken();
-    game.authTokens.set(playerId, myToken);
-
-    socket.playerId = playerId;
-    socket.join(normalizedKey);
-    socket.join(`${playerId}:${myToken}`);
-    trackPlayerSighting(data);
-    bumpPeakConcurrent();
-    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
-        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
-        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
-
-        console.log(`${nickname} joined game: ${displayKey}`);
-});
-
-    // Leave game
-    socket.on('leaveGame', (data) => {
-        const actorId = socket.playerId || data.playerId;
-        for (const [key, game] of games) {
-            if (!verifyAuth(game, actorId, data.authToken)) {
-                // still allow leave even on bad token for cleanup, but log
-                console.log('Leave with invalid token for', actorId);
-            }
-            const index = game.players.findIndex(p => p.id === actorId);
-            if (index !== -1) {
-                const leaving = game.players[index];
-                if (leaving && leaving.isBot) {
-                    break;
-                }
-                const wasCreator = index === 0;
-                const wasTurn = game.currentPlayerId === actorId;
-                game.players.splice(index, 1);
-                game.readyPlayers.delete(actorId);
-                game.lastActivity = Date.now();
-                socket.to(key).emit('playerLeft', { players: game.players });
-                if (endGameIfNoHumans(game, key, 'No human players remain')) {
-                    break;
-                }
-                if (wasCreator && !game.isStarted) {
-                    io.to(key).emit('gameEnded', { message: 'Creator left the game' });
-                    clearBotTimer(game);
-                    games.delete(key);
-                    break;
-                }
-                if (game.isStarted && game.players.length < 2) {
-                    io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
-                    clearBotTimer(game);
-                    games.delete(key);
-                    break;
-                }
-                if (game.readyPhase) {
-                    io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
-                }
-                if (game.isStarted && wasTurn && !game.roundOver) {
-                    const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
-                    if (active.length > 0) {
-                        game.currentPlayerId = active[0].id;
-                        if (game.deck && game.deck.length > 0) {
-                            drawForPlayer(game, key, game.currentPlayerId);
-                        } else {
-                            io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
-                            maybeScheduleBotTurn(game, key);
-                        }
-                    }
-                }
-                console.log(`Player ${actorId} left game: ${key}`);
-                break;
-            }
-        }
-    });
-
-    // Kick player
-    socket.on('kickPlayer', (data) => {
-        const actorId = socket.playerId || data.playerId;
-        const { kickedPlayerId } = data;
-        for (const [key, game] of games) {
-            if (!verifyAuth(game, actorId, data.authToken)) {
-                socket.emit('error', 'Invalid session');
-                return;
-            }
-            const kicker = game.players.find(p => p.id === actorId);
-            if (kicker && game.players.length > 0 && game.players[0] && game.players[0].id === actorId) { // Only creator can kick
-                const kickedIndex = game.players.findIndex(p => p.id === kickedPlayerId);
-                if (kickedIndex !== -1 && kickedPlayerId !== actorId) {
-                    const kickedPlayer = game.players.splice(kickedIndex, 1)[0];
-                    game.readyPlayers.delete(kickedPlayerId);
-                    game.lastActivity = Date.now();
-                    // Increment kick count
-                    const newCount = (game.kickCounts.get(kickedPlayerId) || 0) + 1;
-                    game.kickCounts.set(kickedPlayerId, newCount);
-                    if (newCount >= 2) {
-                        game.banned.add(kickedPlayerId);
-                        console.log(`Player ${kickedPlayerId} banned from game: ${key}`);
-                    }
-                    // Find the kicked player's socket and emit
-                    for (const [id, sock] of io.sockets.sockets) {
-                        if (sock.playerId === kickedPlayerId) {
-                            sock.emit('kicked', { message: newCount >= 2 ? 'You have been banned from this game.' : 'You have been kicked from the game.' });
-                            sock.leave(key);
-                            break;
-                        }
-                    }
-                    socket.to(key).emit('playerLeft', { players: game.players });
-                    if (endGameIfNoHumans(game, key, 'No human players remain')) {
-                        break;
-                    }
-                    if (game.readyPhase) {
-                        io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
-                    }
-                    console.log(`Player ${kickedPlayerId} kicked from game: ${key} (count: ${newCount})`);
-                }
-            }
-            break;
-        }
-    });
-
-// Reconnect to game
-socket.on('reconnectGame', (data) => {
-    const { joinKey, playerId, authToken } = data;
-    console.log('Received reconnectGame for', joinKey, playerId);
-    const normalizedKey = normalizeJoinKey(joinKey);
-    const game = games.get(normalizedKey);
-    if (!game) {
-        socket.emit('error', 'Game not found');
-        return;
-    }
-    if (false) { // No expiry for testing
-        games.delete(normalizedKey);
-        socket.emit('error', 'Game expired');
-        return;
-    }
-    if (game.banned.has(playerId)) {
-        socket.emit('error', 'You are banned from this game.');
-        return;
-    }
-    const player = game.players.find(p => p.id === playerId);
-    if (!player) {
-        socket.emit('error', 'Player not in game');
-        return;
-    }
-    if (player.isBot) {
-        socket.emit('error', 'Cannot reconnect as a bot seat');
-        return;
-    }
-    // Validate token if we have one stored
-    if (game.authTokens && game.authTokens.has(playerId)) {
-        const expected = game.authTokens.get(playerId);
-        if (!authToken || authToken !== expected) {
-            socket.emit('error', 'Invalid session for this player');
-            return;
-        }
-    }
-
-    const displayKey = game.joinKey || normalizedKey;
-    const token = game.authTokens ? game.authTokens.get(playerId) : null;
-
-    socket.playerId = playerId;
-    socket.join(normalizedKey);
-    if (token) {
-        socket.join(`${playerId}:${token}`);
-    } else {
-        socket.join(playerId); // legacy fallback
-    }
-    game.lastActivity = Date.now();
-    ensureGameAvatarIds(game);
-    trackPlayerSighting(data);
-    bumpPeakConcurrent();
-    socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: token });
-
-    // Send current hand on reconnect if game is active
-    if (game.isStarted && game.hands && game.hands.has(playerId)) {
-        const h = game.hands.get(playerId);
-        socket.emit('privateHand', {
-            hand: h.map(c => ({ name: c.name, value: c.value }))
-        });
-    }
-
-    console.log(`Reconnected ${player.nickname} to game: ${displayKey}`);
-});
-
-// Send message
-socket.on('sendMessage', (data) => {
-    const { message, playerId } = data;
-    if (!message || message.trim() === '') return;
-
-    // Find the game
-    let game = null;
-    let playerNickname = null;
-    for (const [key, g] of games) {
-        const player = g.players.find(p => p.id === playerId);
-        if (player) {
-            game = g;
-            playerNickname = player.nickname;
-            break;
-        }
-    }
-    if (!game) return;
-
-    const chatMessage = `${playerNickname}: ${message.trim()}`;
-    game.chat.push(chatMessage);
-    game.lastActivity = Date.now();
-    io.to(game.joinKey).emit('message', { message: chatMessage });
-});
-
-// Start ready phase
-socket.on('startReady', (data) => {
-    const actorId = socket.playerId || data.playerId;
-    for (const [key, game] of games) {
-        if (!verifyAuth(game, actorId, data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-        if (game.players && game.players.length >= 2 && game.players[0] && game.players[0].id === actorId && !game.readyPhase && !game.isStarted) {
-            game.readyPhase = true;
-            game.readyPlayers.clear();
-            game.readyPlayers.add(actorId);
-            game.players.forEach(p => {
-                if (p.isBot) game.readyPlayers.add(p.id);
-            });
-            game.lastActivity = Date.now();
-            io.to(key).emit('readyPhaseStarted');
-            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
-            console.log(`Ready phase started for game: ${key}`);
-            if (game.readyPlayers.size === game.players.length && game.players.length >= 2) {
-                initializeGame(game, key);
-                console.log(`Game auto-started for ${key} (bots auto-ready)`);
-            }
-            break;
-        }
-    }
-});
-
-// Toggle ready
-socket.on('toggleReady', (data) => {
-    const actorId = socket.playerId || data.playerId;
-    for (const [key, game] of games) {
-        if (!verifyAuth(game, actorId, data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-        const player = game.players.find(p => p.id === actorId);
-        if (player && game.readyPhase && !game.isStarted) {
-            if (game.readyPlayers.has(actorId)) {
-                game.readyPlayers.delete(actorId);
-            } else {
-                game.readyPlayers.add(actorId);
-            }
-            game.lastActivity = Date.now();
-            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
-            // Auto-start when all ready
-            if (game.readyPlayers.size === game.players.length) {
-                initializeGame(game, key);
-                console.log(`Game auto-started for ${key}`);
-            }
-            console.log(`Player ${actorId} toggled ready in game: ${key}`);
-            break;
-        }
-    }
-});
-
-// Host: add one AI courtier (lobby / pre-start only)
-socket.on('addBot', (data) => {
-    const actorId = socket.playerId || (data && data.playerId);
-    let found = false;
-    for (const [key, game] of games) {
-        if (!game.players.some(p => p.id === actorId)) continue;
-        found = true;
-        if (!verifyAuth(game, actorId, data && data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-        if (!game.players[0] || game.players[0].id !== actorId) {
-            socket.emit('error', 'Only the host can add bots');
-            return;
-        }
-        const result = addBotToGame(game, key);
-        if (!result.ok) socket.emit('error', result.error);
-        return;
-    }
-    if (!found) socket.emit('error', 'Game not found');
-});
-
-// Host: fill remaining chairs with bots (up to 6)
-socket.on('fillBots', (data) => {
-    const actorId = socket.playerId || (data && data.playerId);
-    let found = false;
-    for (const [key, game] of games) {
-        if (!game.players.some(p => p.id === actorId)) continue;
-        found = true;
-        if (!verifyAuth(game, actorId, data && data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-        if (!game.players[0] || game.players[0].id !== actorId) {
-            socket.emit('error', 'Only the host can add bots');
-            return;
-        }
-        if (game.isStarted) {
-            socket.emit('error', 'Cannot add bots after the match has started');
-            return;
-        }
-        let added = 0;
-        while (game.players.length < MAX_PLAYERS) {
-            const result = addBotToGame(game, key);
-            if (!result.ok) break;
-            added += 1;
-        }
-        if (added === 0 && game.players.length >= MAX_PLAYERS) {
-            socket.emit('error', 'Game is full');
-        }
-        return;
-    }
-    if (!found) socket.emit('error', 'Game not found');
-});
-
-// Play a card (core game action)
-socket.on('playCard', (data) => {
-    // SECURITY: Use the playerId that was established when this socket joined the game.
-    // Do not fully trust the playerId from the client payload for auth decisions.
-    const actorId = socket.playerId || data.playerId;
-    const { cardIndex, targetPlayerId, guess } = data;
-
-    for (const [key, game] of games) {
-        if (!game.isStarted || game.roundOver) continue;
-
-        if (!verifyAuth(game, actorId, data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-
-        const pIdx = game.players.findIndex(pp => pp.id === actorId);
-        if (pIdx === -1) continue;
-
-        const result = tryPlayCard(game, key, actorId, cardIndex, targetPlayerId, guess);
-        if (!result.ok) {
-            socket.emit('error', result.error);
-        }
-        break;
-    }
-});
-
-// Also harden getMyHand
-socket.on('getMyHand', (data) => {
-    const actorId = socket.playerId || data.playerId;
-    for (const [key, game] of games) {
-        if (!verifyAuth(game, actorId, data.authToken)) {
-            socket.emit('error', 'Invalid session');
-            return;
-        }
-        if (game.isStarted && game.hands && game.hands.has(actorId)) {
-            const h = game.hands.get(actorId);
-            socket.emit('privateHand', {
-                hand: h.map(c => ({ name: c.name, value: c.value }))
-            });
-            break;
-        }
-    }
-});
-
 function addBotToGame(game, key) {
     if (game.isStarted) {
         return { ok: false, error: 'Cannot add bots after the match has started' };
@@ -873,12 +371,28 @@ function endGameIfNoHumans(game, key, message) {
     return true;
 }
 
+// Emit turn change and always (re)arm bot scheduling when the seat is a bot.
+function emitTurnChanged(game, key) {
+    if (!game || !key) return;
+    io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
+    maybeScheduleBotTurn(game, key);
+}
+
 function maybeScheduleBotTurn(game, key) {
     if (!game || !game.isStarted || game.roundOver) return;
     const pid = game.currentPlayerId;
-    const player = game.players.find(p => p.id === pid);
+    if (!pid) return;
+    const player = (game.players || []).find(p => p && p.id === pid);
     if (!player || !player.isBot) return;
     if (game.eliminated && game.eliminated.has(pid)) return;
+
+    // Ensure the bot has drawn for this turn (2 cards) before arming the timer.
+    // Covers reconnect / recovery paths that set currentPlayerId without drawForPlayer.
+    const hand = (game.hands && game.hands.get(pid)) || [];
+    if (hand.length === 1 && game.deck && game.deck.length > 0 && game.hands && game.hands.has(pid)) {
+        drawForPlayer(game, key, pid);
+        return; // drawForPlayer emits turnChanged + schedules
+    }
 
     clearBotTimer(game);
     const delay = 800 + Math.floor(Math.random() * 701); // 800–1500ms
@@ -886,7 +400,23 @@ function maybeScheduleBotTurn(game, key) {
         game.botTurnTimer = null;
         if (!games.has(key) || !game.isStarted || game.roundOver) return;
         if (game.currentPlayerId !== pid) return;
-        executeBotTurn(game, key, pid);
+        const still = (game.players || []).find(p => p && p.id === pid);
+        if (!still || !still.isBot) return;
+        try {
+            const played = executeBotTurn(game, key, pid);
+            // If the bot somehow failed to play, retry once after a short beat
+            // so the table never stalls waiting on a socket that does not exist.
+            if (!played && games.has(key) && game.currentPlayerId === pid && !game.roundOver) {
+                console.log('Bot turn incomplete, retrying once for', pid);
+                game.botTurnTimer = setTimeout(() => {
+                    game.botTurnTimer = null;
+                    if (!games.has(key) || game.currentPlayerId !== pid || game.roundOver) return;
+                    executeBotTurn(game, key, pid);
+                }, 500);
+            }
+        } catch (err) {
+            console.error('Bot turn threw', pid, err);
+        }
     }, delay);
 }
 
@@ -894,10 +424,10 @@ function executeBotTurn(game, key, actorId) {
     const choice = chooseBotPlay(game, actorId);
     if (!choice) {
         console.log('Bot had no play', actorId);
-        return;
+        return false;
     }
     let result = tryPlayCard(game, key, actorId, choice.cardIndex, choice.targetPlayerId, choice.guess);
-    if (result.ok) return;
+    if (result.ok) return true;
 
     console.log('Bot play rejected, trying fallback:', result.error);
     const hand = (game.hands && game.hands.get(actorId)) || [];
@@ -919,9 +449,10 @@ function executeBotTurn(game, key, actorId) {
             if (card.name === 'Guard' && targetPlayerId) guess = chooseGuardGuess();
         }
         result = tryPlayCard(game, key, actorId, i, targetPlayerId, guess);
-        if (result.ok) return;
+        if (result.ok) return true;
     }
     console.log('Bot fallback also failed for', actorId);
+    return false;
 }
 
 // Shared play path for humans (socket) and bots (scheduled). Emits the same public events.
@@ -1113,10 +644,8 @@ function startNewRound(game, key, isFirstRound = false) {
     // Announce the draw and whose turn it is (client uses this to enable actionArea)
     const p = game.players.find(pp => pp.id === game.currentPlayerId);
     io.to(key).emit('playerDrew', { playerId: game.currentPlayerId, nickname: p ? p.nickname : '' });
-    io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
-
     console.log(`Round ${game.roundNumber} started for ${key}, first player: ${game.currentPlayerId}`);
-    maybeScheduleBotTurn(game, key);
+    emitTurnChanged(game, key);
 }
 
 function drawForPlayer(game, key, playerId) {
@@ -1154,8 +683,7 @@ function drawForPlayer(game, key, playerId) {
     // If after draw they have Countess + King/Prince, they are forced to play Countess (client can enforce too)
     // But server will enforce on playCard
 
-    io.to(key).emit('turnChanged', { currentPlayerId: playerId });
-    maybeScheduleBotTurn(game, key);
+    emitTurnChanged(game, key);
 }
 
 function advanceToNextPlayer(game, key) {
@@ -1492,6 +1020,553 @@ function endRound(game, key, deckEmpty = false) {
     }, 4000);
 }
 
+
+io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
+
+// Create a new game
+socket.on('createGame', (data) => {
+    const { nickname, playerId } = data;
+    if (!nickname || nickname.trim() === '') {
+        socket.emit('error', 'Nickname is required');
+        return;
+    }
+
+    const prettyKey = generateMemorableCode();
+    const joinKey = normalizeJoinKey(prettyKey);
+        const game = {
+            joinKey: prettyKey,   // store pretty version for display
+            players: [{ id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' }],
+            chat: [],
+            lastActivity: Date.now(),
+            kickCounts: new Map(),
+            banned: new Set(),
+            readyPhase: false,
+            readyPlayers: new Set(),
+            isStarted: false,
+            deck: [],
+            hands: new Map(),
+            currentPlayerId: null,
+            burnedCard: null,
+            authTokens: new Map()  // playerId -> secret token
+        };
+    const myToken = generateAuthToken();
+    game.authTokens.set(playerId, myToken);
+
+    games.set(joinKey, game);
+    metricsState.roomsCreated += 1;
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
+
+    socket.playerId = playerId;
+    socket.join(joinKey);
+    socket.join(`${playerId}:${myToken}`); // private room using token (not guessable from playerId)
+    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', prettyKey);
+        socket.emit('gameJoined', { joinKey: prettyKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        console.log(`Game created: ${prettyKey} by ${nickname}`);
+});
+
+// Join an existing game
+socket.on('joinGame', (data) => {
+    const { joinKey, nickname, playerId } = data;
+    if (!nickname || nickname.trim() === '') {
+        socket.emit('error', 'Nickname is required');
+        return;
+    }
+
+    const normalizedKey = normalizeJoinKey(joinKey);
+    const game = games.get(normalizedKey);
+    if (!game) {
+        socket.emit('error', 'Game not found');
+        return;
+    }
+
+    if (game.banned.has(playerId)) {
+        socket.emit('error', 'You are banned from this game.');
+        return;
+    }
+
+    const displayKey = game.joinKey || normalizedKey;
+
+    // Ensure authTokens map exists (for old games)
+    if (!game.authTokens) game.authTokens = new Map();
+
+    // Check if player already in game
+    const existingPlayer = game.players.find(p => p.id === playerId);
+    if (existingPlayer) {
+        if (existingPlayer.isBot) {
+            socket.emit('error', 'Cannot join as a bot seat');
+            return;
+        }
+        // SECURITY: for existing playerId, require the correct authToken if one is on file
+        if (game.authTokens && game.authTokens.has(playerId)) {
+            const expected = game.authTokens.get(playerId);
+            const provided = data.authToken;
+            if (provided && provided !== expected) {
+                socket.emit('error', 'This player is already in the game with a different session.');
+                return;
+            }
+            if (!provided && expected) {
+                // No token provided but one exists: reject to prevent easy spoof from knowing only playerId
+                socket.emit('error', 'Valid session token required to rejoin as this player.');
+                return;
+            }
+        }
+
+        ensureHumanAvatarId(existingPlayer);
+        // Update nickname if changed and not taken by others
+        const trimmedNick = nickname.trim();
+        if (existingPlayer.nickname !== trimmedNick) {
+            if (game.players.some(p => p.id !== playerId && p.nickname === trimmedNick)) {
+                socket.emit('error', 'Nickname already taken');
+                return;
+            }
+            existingPlayer.nickname = trimmedNick;
+            game.lastActivity = Date.now();
+        }
+        const myToken = game.authTokens.get(playerId) || generateAuthToken();
+        game.authTokens.set(playerId, myToken);
+
+        socket.playerId = playerId;
+        socket.join(normalizedKey);
+        socket.join(`${playerId}:${myToken}`);
+        trackPlayerSighting(data);
+        bumpPeakConcurrent();
+        console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
+        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
+        console.log(`${trimmedNick} rejoined game: ${displayKey}`);
+        return;
+    }
+
+    // Per policy: disallow brand-new players from joining once a round has started.
+    // Reconnects for existing playerIds are allowed (handled in the block above).
+    // Joins are permitted again during the inter-round pause (roundOver) so the
+    // newcomer is included when startNewRound deals the next hands.
+    if (game.isStarted && !game.roundOver) {
+        socket.emit('error', 'Cannot join: a round is already in progress');
+        return;
+    }
+
+    if (game.players.length >= 6) {
+        socket.emit('error', 'Game is full');
+        return;
+    }
+
+    // Check for duplicate nickname
+    if (game.players.some(p => p.nickname === nickname.trim())) {
+        socket.emit('error', 'Nickname already taken');
+        return;
+    }
+
+    const player = { id: playerId, nickname: nickname.trim(), isBot: false, avatarId: 'human-default' };
+    game.players.push(player);
+    game.lastActivity = Date.now();
+
+    if (!game.authTokens) game.authTokens = new Map();
+    const myToken = generateAuthToken();
+    game.authTokens.set(playerId, myToken);
+
+    socket.playerId = playerId;
+    socket.join(normalizedKey);
+    socket.join(`${playerId}:${myToken}`);
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
+    console.log('Emitting gameJoined to', socket.id, 'with joinKey:', displayKey);
+        socket.emit('gameJoined', { joinKey: displayKey, players: game.players, readyPhase: game.readyPhase, readyPlayers: Array.from(game.readyPlayers), isStarted: game.isStarted, authToken: myToken });
+        socket.to(normalizedKey).emit('playerJoined', { players: game.players });
+
+        console.log(`${nickname} joined game: ${displayKey}`);
+});
+
+    // Leave game
+    socket.on('leaveGame', (data) => {
+        const actorId = socket.playerId || data.playerId;
+        for (const [key, game] of games) {
+            if (!verifyAuth(game, actorId, data.authToken)) {
+                // still allow leave even on bad token for cleanup, but log
+                console.log('Leave with invalid token for', actorId);
+            }
+            const index = game.players.findIndex(p => p.id === actorId);
+            if (index !== -1) {
+                const leaving = game.players[index];
+                if (leaving && leaving.isBot) {
+                    break;
+                }
+                const wasCreator = index === 0;
+                const wasTurn = game.currentPlayerId === actorId;
+                game.players.splice(index, 1);
+                game.readyPlayers.delete(actorId);
+                game.lastActivity = Date.now();
+                socket.to(key).emit('playerLeft', { players: game.players });
+                if (endGameIfNoHumans(game, key, 'No human players remain')) {
+                    break;
+                }
+                if (wasCreator && !game.isStarted) {
+                    io.to(key).emit('gameEnded', { message: 'Creator left the game' });
+                    clearBotTimer(game);
+                    games.delete(key);
+                    break;
+                }
+                if (game.isStarted && game.players.length < 2) {
+                    io.to(key).emit('gameEnded', { message: 'Game ended due to insufficient players' });
+                    clearBotTimer(game);
+                    games.delete(key);
+                    break;
+                }
+                if (game.readyPhase) {
+                    io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                }
+                if (game.isStarted && wasTurn && !game.roundOver) {
+                    const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
+                    if (active.length > 0) {
+                        game.currentPlayerId = active[0].id;
+                        if (game.deck && game.deck.length > 0) {
+                            drawForPlayer(game, key, game.currentPlayerId);
+                        } else {
+                            emitTurnChanged(game, key);
+                        }
+                    }
+                }
+                console.log(`Player ${actorId} left game: ${key}`);
+                break;
+            }
+        }
+    });
+
+    // Kick player
+    socket.on('kickPlayer', (data) => {
+        const actorId = socket.playerId || data.playerId;
+        const { kickedPlayerId } = data;
+        for (const [key, game] of games) {
+            if (!verifyAuth(game, actorId, data.authToken)) {
+                socket.emit('error', 'Invalid session');
+                return;
+            }
+            const kicker = game.players.find(p => p.id === actorId);
+            if (kicker && game.players.length > 0 && game.players[0] && game.players[0].id === actorId) { // Only creator can kick
+                const kickedIndex = game.players.findIndex(p => p.id === kickedPlayerId);
+                if (kickedIndex !== -1 && kickedPlayerId !== actorId) {
+                    const kickedPlayer = game.players.splice(kickedIndex, 1)[0];
+                    game.readyPlayers.delete(kickedPlayerId);
+                    game.lastActivity = Date.now();
+                    // Increment kick count
+                    const newCount = (game.kickCounts.get(kickedPlayerId) || 0) + 1;
+                    game.kickCounts.set(kickedPlayerId, newCount);
+                    if (newCount >= 2) {
+                        game.banned.add(kickedPlayerId);
+                        console.log(`Player ${kickedPlayerId} banned from game: ${key}`);
+                    }
+                    // Find the kicked player's socket and emit
+                    for (const [id, sock] of io.sockets.sockets) {
+                        if (sock.playerId === kickedPlayerId) {
+                            sock.emit('kicked', { message: newCount >= 2 ? 'You have been banned from this game.' : 'You have been kicked from the game.' });
+                            sock.leave(key);
+                            break;
+                        }
+                    }
+                    const wasTurn = game.currentPlayerId === kickedPlayerId;
+                    if (game.eliminated) game.eliminated.delete(kickedPlayerId);
+                    if (game.protected) game.protected.delete(kickedPlayerId);
+                    if (game.hands) game.hands.delete(kickedPlayerId);
+                    if (kickedPlayer && kickedPlayer.isBot) {
+                        clearBotTimer(game);
+                    }
+                    socket.to(key).emit('playerLeft', { players: game.players });
+                    if (endGameIfNoHumans(game, key, 'No human players remain')) {
+                        break;
+                    }
+                    if (game.readyPhase) {
+                        io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+                    }
+                    if (game.isStarted && wasTurn && !game.roundOver && game.players.length >= 2) {
+                        const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
+                        if (active.length > 0) {
+                            game.currentPlayerId = active[0].id;
+                            if (game.deck && game.deck.length > 0 && game.hands && game.hands.has(game.currentPlayerId)) {
+                                const h = game.hands.get(game.currentPlayerId) || [];
+                                if (h.length < 2) drawForPlayer(game, key, game.currentPlayerId);
+                                else emitTurnChanged(game, key);
+                            } else {
+                                emitTurnChanged(game, key);
+                            }
+                        }
+                    } else if (game.isStarted && !game.roundOver) {
+                        // Current seat unchanged — re-arm bot timer if needed (e.g. kicked non-turn bot mid-delay).
+                        maybeScheduleBotTurn(game, key);
+                    }
+                    console.log(`Player ${kickedPlayerId} kicked from game: ${key} (count: ${newCount})`);
+                }
+            }
+            break;
+        }
+    });
+
+// Reconnect to game
+socket.on('reconnectGame', (data) => {
+    const { joinKey, playerId, authToken } = data;
+    console.log('Received reconnectGame for', joinKey, playerId);
+    const normalizedKey = normalizeJoinKey(joinKey);
+    const game = games.get(normalizedKey);
+    if (!game) {
+        socket.emit('error', 'Game not found');
+        return;
+    }
+    if (false) { // No expiry for testing
+        games.delete(normalizedKey);
+        socket.emit('error', 'Game expired');
+        return;
+    }
+    if (game.banned.has(playerId)) {
+        socket.emit('error', 'You are banned from this game.');
+        return;
+    }
+    const player = game.players.find(p => p.id === playerId);
+    if (!player) {
+        socket.emit('error', 'Player not in game');
+        return;
+    }
+    if (player.isBot) {
+        socket.emit('error', 'Cannot reconnect as a bot seat');
+        return;
+    }
+    // Validate token if we have one stored
+    if (game.authTokens && game.authTokens.has(playerId)) {
+        const expected = game.authTokens.get(playerId);
+        if (!authToken || authToken !== expected) {
+            socket.emit('error', 'Invalid session for this player');
+            return;
+        }
+    }
+
+    const displayKey = game.joinKey || normalizedKey;
+    const token = game.authTokens ? game.authTokens.get(playerId) : null;
+
+    socket.playerId = playerId;
+    socket.join(normalizedKey);
+    if (token) {
+        socket.join(`${playerId}:${token}`);
+    } else {
+        socket.join(playerId); // legacy fallback
+    }
+    game.lastActivity = Date.now();
+    ensureGameAvatarIds(game);
+    trackPlayerSighting(data);
+    bumpPeakConcurrent();
+    socket.emit('gameJoined', {
+        joinKey: displayKey,
+        players: game.players,
+        readyPhase: game.readyPhase,
+        readyPlayers: Array.from(game.readyPlayers || []),
+        isStarted: game.isStarted,
+        authToken: token,
+        currentPlayerId: game.currentPlayerId || null,
+        roundOver: !!game.roundOver,
+        roundNumber: game.roundNumber || null,
+        tokens: game.tokens ? Object.fromEntries(game.tokens) : {},
+        eliminated: game.eliminated ? Array.from(game.eliminated) : [],
+        protected: game.protected ? Array.from(game.protected) : []
+    });
+
+    // Send current hand on reconnect if game is active
+    if (game.isStarted && game.hands && game.hands.has(playerId)) {
+        const h = game.hands.get(playerId);
+        socket.emit('privateHand', {
+            hand: h.map(c => ({ name: c.name, value: c.value }))
+        });
+    }
+
+    // Re-arm bot turn scheduling after reconnect/state sync. Timers may have been
+    // cleared on the prior socket lifecycle; humans have no bot socket to "prompt".
+    if (game.isStarted && !game.roundOver) {
+        if (game.currentPlayerId) {
+            socket.emit('turnChanged', { currentPlayerId: game.currentPlayerId });
+        }
+        maybeScheduleBotTurn(game, normalizedKey);
+    }
+
+    console.log(`Reconnected ${player.nickname} to game: ${displayKey}`);
+});
+
+// Send message
+socket.on('sendMessage', (data) => {
+    const { message, playerId } = data;
+    if (!message || message.trim() === '') return;
+
+    // Find the game
+    let game = null;
+    let playerNickname = null;
+    for (const [key, g] of games) {
+        const player = g.players.find(p => p.id === playerId);
+        if (player) {
+            game = g;
+            playerNickname = player.nickname;
+            break;
+        }
+    }
+    if (!game) return;
+
+    const chatMessage = `${playerNickname}: ${message.trim()}`;
+    game.chat.push(chatMessage);
+    game.lastActivity = Date.now();
+    io.to(game.joinKey).emit('message', { message: chatMessage });
+});
+
+// Start ready phase
+socket.on('startReady', (data) => {
+    const actorId = socket.playerId || data.playerId;
+    for (const [key, game] of games) {
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (game.players && game.players.length >= 2 && game.players[0] && game.players[0].id === actorId && !game.readyPhase && !game.isStarted) {
+            game.readyPhase = true;
+            game.readyPlayers.clear();
+            game.readyPlayers.add(actorId);
+            game.players.forEach(p => {
+                if (p.isBot) game.readyPlayers.add(p.id);
+            });
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyPhaseStarted');
+            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+            console.log(`Ready phase started for game: ${key}`);
+            if (game.readyPlayers.size === game.players.length && game.players.length >= 2) {
+                initializeGame(game, key);
+                console.log(`Game auto-started for ${key} (bots auto-ready)`);
+            }
+            break;
+        }
+    }
+});
+
+// Toggle ready
+socket.on('toggleReady', (data) => {
+    const actorId = socket.playerId || data.playerId;
+    for (const [key, game] of games) {
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        const player = game.players.find(p => p.id === actorId);
+        if (player && game.readyPhase && !game.isStarted) {
+            if (game.readyPlayers.has(actorId)) {
+                game.readyPlayers.delete(actorId);
+            } else {
+                game.readyPlayers.add(actorId);
+            }
+            game.lastActivity = Date.now();
+            io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
+            // Auto-start when all ready
+            if (game.readyPlayers.size === game.players.length) {
+                initializeGame(game, key);
+                console.log(`Game auto-started for ${key}`);
+            }
+            console.log(`Player ${actorId} toggled ready in game: ${key}`);
+            break;
+        }
+    }
+});
+
+// Host: add one AI courtier (lobby / pre-start only)
+socket.on('addBot', (data) => {
+    const actorId = socket.playerId || (data && data.playerId);
+    let found = false;
+    for (const [key, game] of games) {
+        if (!game.players.some(p => p.id === actorId)) continue;
+        found = true;
+        if (!verifyAuth(game, actorId, data && data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (!game.players[0] || game.players[0].id !== actorId) {
+            socket.emit('error', 'Only the host can add bots');
+            return;
+        }
+        const result = addBotToGame(game, key);
+        if (!result.ok) socket.emit('error', result.error);
+        return;
+    }
+    if (!found) socket.emit('error', 'Game not found');
+});
+
+// Host: fill remaining chairs with bots (up to 6)
+socket.on('fillBots', (data) => {
+    const actorId = socket.playerId || (data && data.playerId);
+    let found = false;
+    for (const [key, game] of games) {
+        if (!game.players.some(p => p.id === actorId)) continue;
+        found = true;
+        if (!verifyAuth(game, actorId, data && data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (!game.players[0] || game.players[0].id !== actorId) {
+            socket.emit('error', 'Only the host can add bots');
+            return;
+        }
+        if (game.isStarted) {
+            socket.emit('error', 'Cannot add bots after the match has started');
+            return;
+        }
+        let added = 0;
+        while (game.players.length < MAX_PLAYERS) {
+            const result = addBotToGame(game, key);
+            if (!result.ok) break;
+            added += 1;
+        }
+        if (added === 0 && game.players.length >= MAX_PLAYERS) {
+            socket.emit('error', 'Game is full');
+        }
+        return;
+    }
+    if (!found) socket.emit('error', 'Game not found');
+});
+
+// Play a card (core game action)
+socket.on('playCard', (data) => {
+    // SECURITY: Use the playerId that was established when this socket joined the game.
+    // Do not fully trust the playerId from the client payload for auth decisions.
+    const actorId = socket.playerId || data.playerId;
+    const { cardIndex, targetPlayerId, guess } = data;
+
+    for (const [key, game] of games) {
+        if (!game.isStarted || game.roundOver) continue;
+
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+
+        const pIdx = game.players.findIndex(pp => pp.id === actorId);
+        if (pIdx === -1) continue;
+
+        const result = tryPlayCard(game, key, actorId, cardIndex, targetPlayerId, guess);
+        if (!result.ok) {
+            socket.emit('error', result.error);
+        }
+        break;
+    }
+});
+
+// Also harden getMyHand
+socket.on('getMyHand', (data) => {
+    const actorId = socket.playerId || data.playerId;
+    for (const [key, game] of games) {
+        if (!verifyAuth(game, actorId, data.authToken)) {
+            socket.emit('error', 'Invalid session');
+            return;
+        }
+        if (game.isStarted && game.hands && game.hands.has(actorId)) {
+            const h = game.hands.get(actorId);
+            socket.emit('privateHand', {
+                hand: h.map(c => ({ name: c.name, value: c.value }))
+            });
+            break;
+        }
+    }
+});
+
 // Handle disconnection
 socket.on('disconnect', () => {
     console.log('A user disconnected:', socket.id);
@@ -1532,17 +1607,19 @@ socket.on('disconnect', () => {
                     // If it was their turn, advance
                     if (game.currentPlayerId === socket.playerId) {
                         // Pick next non-eliminated (simple recovery; order is original list order)
-                        const active = game.players.filter(p => !game.eliminated.has(p.id));
+                        const active = game.players.filter(p => !game.eliminated || !game.eliminated.has(p.id));
                         if (active.length > 0) {
                             game.currentPlayerId = active[0].id;
-                            io.to(key).emit('turnChanged', { currentPlayerId: game.currentPlayerId });
-                            // draw for them if possible
                             if (!game.roundOver && game.deck && game.deck.length > 0) {
                                 drawForPlayer(game, key, game.currentPlayerId);
                             } else {
-                                maybeScheduleBotTurn(game, key);
+                                emitTurnChanged(game, key);
                             }
                         }
+                    } else if (!game.roundOver) {
+                        // Human socket dropped while a bot (or other seat) holds the turn —
+                        // re-arm scheduling so we never stall waiting on a non-existent bot socket.
+                        maybeScheduleBotTurn(game, key);
                     }
                     io.to(key).emit('readyUpdate', { players: game.players, readyPlayers: Array.from(game.readyPlayers) });
                 }
